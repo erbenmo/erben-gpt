@@ -34,14 +34,19 @@ itoc = lambda i: chars[i]
 # train a bigram look up table, basically for each token store the probability of all next token
 model = nn.Embedding(vocab_size, vocab_size)
 optimizer = adam.Adam(model.parameters(), lr=1e-3)
-steps = 100000
+steps = 10000
+batch = 32
+name_idx = 0
 for step in range(steps):
-    name = dataset[step % len(dataset)]
+    names = []
+    for _ in range(batch):
+        names.append(dataset[name_idx % len(dataset)])
+        name_idx += 1
 
     # input:   SEP, E, M, M, A
     # target:  E,   M, M, A, SEP
-    input = torch.tensor([ctoi(c) for c in list(SEP + name)])
-    target = torch.tensor([ctoi(c) for c in list(name + SEP)])
+    input = torch.tensor([ctoi(c) for name in names for c in list(SEP + name)])
+    target = torch.tensor([ctoi(c) for name in names for c in list(name + SEP)])
 
     # forward pass - train on this input
     logits = model(input) # shape: [len(input), vocab_size]
@@ -53,7 +58,7 @@ for step in range(steps):
     optimizer.step()
 
     if step % 1000 == 0:
-        print(f"step: {step}, loss: {loss.item():.4f}, name: {name}")
+        print(f"step: {step}, loss: {loss.item():.4f}")
 
 print("Generation samples:")
 # generate a few samples
