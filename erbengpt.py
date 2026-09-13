@@ -32,7 +32,29 @@ ctoi = lambda c: chars.index(c)
 itoc = lambda i: chars[i]
 
 # train a bigram look up table, basically for each token store the probability of all next token
-model = nn.Embedding(vocab_size, vocab_size)
+class BigramModel(nn.Embedding):
+    def __init__(self, vocab_size):
+        super().__init__(vocab_size, vocab_size)
+
+# train a language model. token id is converted into 16 features and we use a linear layer to predict next token
+class LanguageModel(nn.Module):
+    def __init__(self, vocab_size, feature_count):
+        super().__init__()
+
+        # embedding each token -> features
+        self.embeddings = nn.Embedding(vocab_size, feature_count)
+
+        # turn features -> prediction of next token
+        self.linear = nn.Linear(feature_count, vocab_size)
+
+    def forward(self, tokens):
+        features = self.embeddings(tokens)
+        return self.linear(features)
+
+# model = BigramModel(vocab_size)
+
+feature_count = 16
+model = LanguageModel(vocab_size, feature_count)
 optimizer = adam.Adam(model.parameters(), lr=1e-3)
 steps = 10000
 batch = 32
