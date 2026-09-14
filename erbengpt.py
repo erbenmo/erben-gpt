@@ -2,7 +2,8 @@ import urllib.request
 from pathlib import Path
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim.adam as adam
+from torch.optim.adam import Adam
+from torch.nn.utils.rnn import pad_sequence
 import torch
 import random
 
@@ -55,11 +56,12 @@ class LanguageModel(nn.Module):
 
 feature_count = 16
 model = LanguageModel(vocab_size, feature_count)
-optimizer = adam.Adam(model.parameters(), lr=1e-3)
-steps = 10000
+optimizer = Adam(model.parameters(), lr=1e-3)
+steps = 100000
 batch = 32
 name_idx = 0
 for step in range(steps):
+    # batching
     names = []
     for _ in range(batch):
         names.append(dataset[name_idx % len(dataset)])
@@ -67,12 +69,19 @@ for step in range(steps):
 
     # input:   SEP, E, M, M, A
     # target:  E,   M, M, A, SEP
-    input = torch.tensor([ctoi(c) for name in names for c in list(SEP + name)])
-    target = torch.tensor([ctoi(c) for name in names for c in list(name + SEP)])
+    input = [torch.tensor([ctoi(c) for c in list(SEP + name)])
+             for name in names]
+    target = [torch.tensor([ctoi(c) for c in list(name + SEP)])
+              for name in names]
+    # padding: SEP -> -100 (and target == -100 is ignored for training)
+    input = pad_sequence(input, batch_first=True, padding_value=torch.tensor(ctoi(SEP)))
+    target = pad_sequence(target, batch_first=True, padding_value=torch.tensor(-100))
 
     # forward pass - train on this input
-    logits = model(input) # shape: [len(input), vocab_size]
-    loss = F.cross_entropy(logits, target)
+    logits = model(input) # shape: [batch, max(len(name))+1, vocab_size]
+    # cross entropy expects shape [batch, vocab_size, max(len(name))+1]
+    logits = logits.transpose(1, 2)
+    loss = F.cross_entropy(logits, target, ignore_index = -100)
 
     # backward pass - find gradient, apply loss
     optimizer.zero_grad()
@@ -82,7 +91,7 @@ for step in range(steps):
     if step % 1000 == 0:
         print(f"step: {step}, loss: {loss.item():.4f}")
 
-print("Generation samples:")
+print("\nGeneration samples:")
 # generate a few samples
 samples = 10
 with torch.no_grad():
