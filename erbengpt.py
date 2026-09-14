@@ -24,6 +24,7 @@ def download_dataset():
 dataset = download_dataset()
 random.seed(42)
 random.shuffle(dataset)
+max_sequence = max(len(name) for name in dataset) + 1
 chars = sorted(list(set("".join(dataset))))
 SEP = '\n'
 chars.append(SEP)
@@ -39,25 +40,35 @@ class BigramModel(nn.Embedding):
 
 # train a language model. token id is converted into 16 features and we use a linear layer to predict next token
 class LanguageModel(nn.Module):
-    def __init__(self, vocab_size, feature_count):
+    def __init__(self, vocab_size, max_sequence, feature_count):
         super().__init__()
 
         # embedding each token -> features
-        self.embeddings = nn.Embedding(vocab_size, feature_count)
+        self.token_embeddings = nn.Embedding(vocab_size, feature_count)
+
+        # embed position -> feature
+        self.position_embedding = nn.Embedding(max_sequence, feature_count)
 
         # turn features -> prediction of next token
         self.linear = nn.Linear(feature_count, vocab_size)
 
+    # tokens.shape = [batch, max_sequence (of this batch)]
     def forward(self, tokens):
-        features = self.embeddings(tokens)
+        # token embedding
+        features = self.token_embeddings(tokens)
+
+        # position embedding, # positions is just a batch of [0, 1, 2, 3,...]
+        batch_size, max_sequence = tokens.shape[0], tokens.shape[1]
+        positions = torch.stack([torch.arange(max_sequence) for _ in range(batch_size)])
+        features += self.position_embedding(positions)
         return self.linear(features)
 
 # model = BigramModel(vocab_size)
 
 feature_count = 16
-model = LanguageModel(vocab_size, feature_count)
+model = LanguageModel(vocab_size, max_sequence, feature_count)
 optimizer = Adam(model.parameters(), lr=1e-3)
-steps = 100000
+steps = 10000
 batch = 32
 name_idx = 0
 for step in range(steps):
@@ -97,12 +108,16 @@ samples = 10
 with torch.no_grad():
     for step in range(samples):
         name = ""
-        token = torch.tensor(ctoi(SEP))
+        tokens = torch.tensor([ctoi(SEP)])
         while True:
-            logits = model(token)
-            token = torch.distributions.Categorical(logits=logits).sample()
-            char = itoc(token.item())
+            logits = model(tokens.unsqueeze(0)) # unsqueeze for batching
+            logits = logits[0][-1] # only care about the last sampled token
+            new_token = torch.distributions.Categorical(logits=logits).sample()
+            tokens = torch.cat([tokens, torch.tensor([new_token])])
+            char = itoc(new_token.item())
             if char == SEP:
                 break
             name += char
+            if len(name) >= max_sequence - 1:
+                break
         print(name)
