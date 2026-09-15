@@ -6,6 +6,7 @@ from torch.optim.adam import Adam
 from torch.nn.utils.rnn import pad_sequence
 import torch
 import random
+import math
 
 
 # download dataset
@@ -49,10 +50,17 @@ class LanguageModel(nn.Module):
         # embed position -> feature
         self.position_embedding = nn.Embedding(max_sequence, feature_count)
 
+        # shared weight for self attention
+        self.q = nn.Linear(feature_count, feature_count, bias = False)
+        self.k = nn.Linear(feature_count, feature_count, bias = False)
+        self.v = nn.Linear(feature_count, feature_count, bias = False)
+
         # turn features -> prediction of next token
         self.linear = nn.Linear(feature_count, vocab_size)
 
-    # tokens.shape = [batch, max_sequence (of this batch)]
+        self.feature_count = feature_count
+
+    # tokens.shape = (batch, max_sequence (of this batch))
     def forward(self, tokens):
         # token embedding
         features = self.token_embeddings(tokens)
@@ -61,7 +69,26 @@ class LanguageModel(nn.Module):
         batch_size, max_sequence = tokens.shape[0], tokens.shape[1]
         positions = torch.stack([torch.arange(max_sequence) for _ in range(batch_size)])
         features += self.position_embedding(positions)
-        return self.linear(features)
+
+        # generate q, k, v -> (B, N, 16)
+        q = self.q(features)
+        k = self.k(features)
+        v = self.v(features)
+
+        # each q should attend to every k, (B, N, 16) @ (B, 16, N) -> (B, N, N)
+        logits = q @ k.transpose(1, 2) / math.sqrt(self.feature_count)
+
+        # then mask attention for (q, later k) to be -inf to ignore them (self attention)
+        n = logits.shape[1]
+        mask = torch.triu(torch.ones(n, n, dtype=torch.bool), diagonal=1)
+        logits = logits.masked_fill(mask, float('-inf'))
+
+        # finally calculate weight and multiple with v and sum
+        # (B, N, N) @ (B, N, 16) -> (B, N, 16)
+        weight = torch.softmax(logits, dim=-1)
+        attention = weight @ v
+
+        return self.linear(attention)
 
 # model = BigramModel(vocab_size)
 
