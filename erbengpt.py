@@ -41,8 +41,11 @@ class BigramModel(nn.Embedding):
 
 # train a language model. token id is converted into 16 features and we use a linear layer to predict next token
 class LanguageModel(nn.Module):
-    def __init__(self, vocab_size, max_sequence, feature_count):
+    def __init__(self, vocab_size, max_sequence, feature_count, head_count):
         super().__init__()
+
+        if feature_count % head_count > 0:
+            raise ValueError(f"feature count {feature_count} must be multiplier of head_count {head_count}")
 
         # embedding each token -> features
         self.token_embeddings = nn.Embedding(vocab_size, feature_count)
@@ -51,14 +54,22 @@ class LanguageModel(nn.Module):
         self.position_embedding = nn.Embedding(max_sequence, feature_count)
 
         # shared weight for self attention
-        self.q = nn.Linear(feature_count, feature_count, bias = False)
-        self.k = nn.Linear(feature_count, feature_count, bias = False)
-        self.v = nn.Linear(feature_count, feature_count, bias = False)
+        self.q = nn.ModuleList()
+        self.k = nn.ModuleList()
+        self.v = nn.ModuleList()
+        head_size = int(feature_count / head_count)
+        for _ in range(head_count):
+            self.q.append(nn.Linear(feature_count, head_size, bias = False))
+            self.k.append(nn.Linear(feature_count, head_size, bias = False))
+            self.v.append(nn.Linear(feature_count, head_size, bias = False))
+
+        self.output_proj = nn.Linear(feature_count, feature_count, bias = False)
 
         # turn features -> prediction of next token
         self.linear = nn.Linear(feature_count, vocab_size)
 
-        self.feature_count = feature_count
+        self.head_count = head_count
+        self.head_size = head_size
 
     # tokens.shape = (batch, max_sequence (of this batch))
     def forward(self, tokens):
@@ -70,30 +81,38 @@ class LanguageModel(nn.Module):
         positions = torch.stack([torch.arange(max_sequence) for _ in range(batch_size)])
         features += self.position_embedding(positions)
 
-        # generate q, k, v -> (B, N, 16)
-        q = self.q(features)
-        k = self.k(features)
-        v = self.v(features)
+        # multi-head attention
+        outputs = []
+        for i in range(self.head_count):
+            # generate q, k, v -> (B, N, H)
+            q = self.q[i](features)
+            k = self.k[i](features)
+            v = self.v[i](features)
 
-        # each q should attend to every k, (B, N, 16) @ (B, 16, N) -> (B, N, N)
-        logits = q @ k.transpose(1, 2) / math.sqrt(self.feature_count)
+            # each q should attend to every k, (B, N, H) @ (B, H, N) -> (B, N, N)
+            logits = q @ k.transpose(1, 2) / math.sqrt(self.head_size)
 
-        # then mask attention for (q, later k) to be -inf to ignore them (self attention)
-        n = logits.shape[1]
-        mask = torch.triu(torch.ones(n, n, dtype=torch.bool), diagonal=1)
-        logits = logits.masked_fill(mask, float('-inf'))
+            # then mask attention for (q, later k) to be -inf to ignore them (self attention)
+            n = logits.shape[1]
+            mask = torch.triu(torch.ones(n, n, dtype=torch.bool), diagonal=1)
+            logits = logits.masked_fill(mask, float('-inf'))
 
-        # finally calculate weight and multiple with v and sum
-        # (B, N, N) @ (B, N, 16) -> (B, N, 16)
-        weight = torch.softmax(logits, dim=-1)
-        attention = weight @ v
+            # finally calculate weight and multiple with v and sum
+            # (B, N, N) @ (B, N, H) -> (B, N, H)
+            weight = torch.softmax(logits, dim=-1)
+            attention = weight @ v
+            outputs.append(attention)
 
-        return self.linear(attention)
+        # merge all (B, N, H) into (B, N, 16)
+        attentions = torch.cat(outputs, dim=-1)
+        attentions = self.output_proj(attentions)
+        return self.linear(attentions)
 
 # model = BigramModel(vocab_size)
 
 feature_count = 16
-model = LanguageModel(vocab_size, max_sequence, feature_count)
+head_count = 4
+model = LanguageModel(vocab_size, max_sequence, feature_count, head_count)
 optimizer = Adam(model.parameters(), lr=1e-3)
 steps = 10000
 batch = 32
