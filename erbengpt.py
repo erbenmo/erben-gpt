@@ -109,7 +109,7 @@ class Transformer(nn.Module):
 
 # train a language model. token id is converted into 16 features and we use a linear layer to predict next token
 class LanguageModel(nn.Module):
-    def __init__(self, vocab_size, max_sequence, feature_count, head_count):
+    def __init__(self, vocab_size, max_sequence, feature_count, head_count, layer_count):
         super().__init__()
 
         if feature_count % head_count > 0:
@@ -122,7 +122,12 @@ class LanguageModel(nn.Module):
         self.position_embedding = nn.Embedding(max_sequence, feature_count)
 
         # transformer: feature -> feature
-        self.transformer = Transformer(feature_count, head_count)
+        self.transformers = nn.ModuleList()
+        for _ in range(layer_count):
+            self.transformers.append(Transformer(feature_count, head_count))
+
+        # final LayerNorm before feature -> token mapping
+        self.ln_final = nn.LayerNorm(feature_count)
 
         # simple mapping: turn features -> next token prediction
         self.linear = nn.Linear(feature_count, vocab_size)
@@ -138,8 +143,10 @@ class LanguageModel(nn.Module):
         positions = torch.stack([torch.arange(max_sequence) for _ in range(batch_size)])
         features += self.position_embedding(positions)
 
-        # transformer
-        features = self.transformer(features)
+        # transformer blocks
+        for transformer in self.transformers:
+            features = transformer(features)
+        features = self.ln_final(features)
 
         # final output: (B, N, vocab_size)
         return self.linear(features)
@@ -148,7 +155,8 @@ class LanguageModel(nn.Module):
 
 feature_count = 16
 head_count = 4
-model = LanguageModel(vocab_size, max_sequence, feature_count, head_count)
+layer_count = 2
+model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count)
 optimizer = Adam(model.parameters(), lr=1e-3)
 steps = 10000
 batch = 32
