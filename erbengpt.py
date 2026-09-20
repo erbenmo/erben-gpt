@@ -39,19 +39,12 @@ class BigramModel(nn.Embedding):
     def __init__(self, vocab_size):
         super().__init__(vocab_size, vocab_size)
 
-# train a language model. token id is converted into 16 features and we use a linear layer to predict next token
-class LanguageModel(nn.Module):
-    def __init__(self, vocab_size, max_sequence, feature_count, head_count):
+class Transformer(nn.Module):
+    def __init__(self, feature_count, head_count):
         super().__init__()
 
         if feature_count % head_count > 0:
             raise ValueError(f"feature count {feature_count} must be multiplier of head_count {head_count}")
-
-        # embedding each token -> features
-        self.token_embeddings = nn.Embedding(vocab_size, feature_count)
-
-        # embed position -> feature
-        self.position_embedding = nn.Embedding(max_sequence, feature_count)
 
         self.ln = nn.LayerNorm(feature_count)
 
@@ -59,11 +52,12 @@ class LanguageModel(nn.Module):
         self.q = nn.ModuleList()
         self.k = nn.ModuleList()
         self.v = nn.ModuleList()
-        head_size = int(feature_count / head_count)
+        self.head_count = head_count
+        self.head_size = int(feature_count / head_count)
         for _ in range(head_count):
-            self.q.append(nn.Linear(feature_count, head_size, bias = False))
-            self.k.append(nn.Linear(feature_count, head_size, bias = False))
-            self.v.append(nn.Linear(feature_count, head_size, bias = False))
+            self.q.append(nn.Linear(feature_count, self.head_size, bias = False))
+            self.k.append(nn.Linear(feature_count, self.head_size, bias = False))
+            self.v.append(nn.Linear(feature_count, self.head_size, bias = False))
 
         self.output_proj = nn.Linear(feature_count, feature_count, bias = False)
 
@@ -75,24 +69,11 @@ class LanguageModel(nn.Module):
             nn.Linear(feature_count * 4, feature_count)
         )
 
-        # simple mapping: turn features -> next token prediction
-        self.linear = nn.Linear(feature_count, vocab_size)
-
-        self.head_count = head_count
-        self.head_size = head_size
-
-    # tokens.shape = (batch, max_sequence (of this batch))
-    def forward(self, tokens):
-        # features: [B, N, 16]
-        features = self.token_embeddings(tokens)
-
-        # position embedding, positions is just a batch of [0, 1, 2, 3,...]
-        batch_size, max_sequence = tokens.shape[0], tokens.shape[1]
-        positions = torch.stack([torch.arange(max_sequence) for _ in range(batch_size)])
-        features += self.position_embedding(positions)
+    # features:
+    def forward(self, features):
+        normalized_features = self.ln(features)
 
         # multi-head attention
-        normalized_features = self.ln(features)
         outputs = []
         for i in range(self.head_count):
             # generate q, k, v -> (B, N, H)
@@ -124,6 +105,41 @@ class LanguageModel(nn.Module):
         normalized_features = self.ln2(features)
         mlp = self.mlp(normalized_features)
         features = features + mlp
+        return features
+
+# train a language model. token id is converted into 16 features and we use a linear layer to predict next token
+class LanguageModel(nn.Module):
+    def __init__(self, vocab_size, max_sequence, feature_count, head_count):
+        super().__init__()
+
+        if feature_count % head_count > 0:
+            raise ValueError(f"feature count {feature_count} must be multiplier of head_count {head_count}")
+
+        # embedding each token -> features
+        self.token_embeddings = nn.Embedding(vocab_size, feature_count)
+
+        # embed position -> feature
+        self.position_embedding = nn.Embedding(max_sequence, feature_count)
+
+        # transformer: feature -> feature
+        self.transformer = Transformer(feature_count, head_count)
+
+        # simple mapping: turn features -> next token prediction
+        self.linear = nn.Linear(feature_count, vocab_size)
+
+    # tokens.shape = (batch, max_sequence (of this batch))
+    def forward(self, tokens):
+        # features: [B, N, 16]
+        # token embeddings
+        features = self.token_embeddings(tokens)
+
+        # position embedding, positions is just a batch of [0, 1, 2, 3,...]
+        batch_size, max_sequence = tokens.shape[0], tokens.shape[1]
+        positions = torch.stack([torch.arange(max_sequence) for _ in range(batch_size)])
+        features += self.position_embedding(positions)
+
+        # transformer
+        features = self.transformer(features)
 
         # final output: (B, N, vocab_size)
         return self.linear(features)
