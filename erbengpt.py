@@ -53,6 +53,8 @@ class LanguageModel(nn.Module):
         # embed position -> feature
         self.position_embedding = nn.Embedding(max_sequence, feature_count)
 
+        self.ln = nn.LayerNorm(feature_count)
+
         # shared weight for self attention
         self.q = nn.ModuleList()
         self.k = nn.ModuleList()
@@ -65,7 +67,15 @@ class LanguageModel(nn.Module):
 
         self.output_proj = nn.Linear(feature_count, feature_count, bias = False)
 
-        # turn features -> prediction of next token
+        # mlp layer
+        self.ln2 = nn.LayerNorm(feature_count)
+        self.mlp = nn.Sequential(
+            nn.Linear(feature_count, feature_count * 4),
+            nn.GELU(),
+            nn.Linear(feature_count * 4, feature_count)
+        )
+
+        # simple mapping: turn features -> next token prediction
         self.linear = nn.Linear(feature_count, vocab_size)
 
         self.head_count = head_count
@@ -73,21 +83,22 @@ class LanguageModel(nn.Module):
 
     # tokens.shape = (batch, max_sequence (of this batch))
     def forward(self, tokens):
-        # token embedding
+        # features: [B, N, 16]
         features = self.token_embeddings(tokens)
 
-        # position embedding, # positions is just a batch of [0, 1, 2, 3,...]
+        # position embedding, positions is just a batch of [0, 1, 2, 3,...]
         batch_size, max_sequence = tokens.shape[0], tokens.shape[1]
         positions = torch.stack([torch.arange(max_sequence) for _ in range(batch_size)])
         features += self.position_embedding(positions)
 
         # multi-head attention
+        normalized_features = self.ln(features)
         outputs = []
         for i in range(self.head_count):
             # generate q, k, v -> (B, N, H)
-            q = self.q[i](features)
-            k = self.k[i](features)
-            v = self.v[i](features)
+            q = self.q[i](normalized_features)
+            k = self.k[i](normalized_features)
+            v = self.v[i](normalized_features)
 
             # each q should attend to every k, (B, N, H) @ (B, H, N) -> (B, N, N)
             logits = q @ k.transpose(1, 2) / math.sqrt(self.head_size)
@@ -106,7 +117,16 @@ class LanguageModel(nn.Module):
         # merge all (B, N, H) into (B, N, 16)
         attentions = torch.cat(outputs, dim=-1)
         attentions = self.output_proj(attentions)
-        return self.linear(attentions)
+        # update original embeddings with attentions
+        features = features + attentions
+
+        # compute layer - MLP
+        normalized_features = self.ln2(features)
+        mlp = self.mlp(normalized_features)
+        features = features + mlp
+
+        # final output: (B, N, vocab_size)
+        return self.linear(features)
 
 # model = BigramModel(vocab_size)
 
