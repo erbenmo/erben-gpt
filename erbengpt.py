@@ -7,7 +7,7 @@ from torch.nn.utils.rnn import pad_sequence
 import torch
 import random
 import math
-
+from itertools import batched
 
 # download dataset
 def download_dataset():
@@ -17,7 +17,7 @@ def download_dataset():
         urllib.request.urlretrieve(url, input_file)
         print(f"downloaded: {input_file}")
     else:
-        print(f"already exists: {input_file}")
+        print(f"{input_file} already exists: ")
 
     with open(input_file) as f:
         dataset = [line.strip() for line in f]
@@ -193,9 +193,21 @@ def validate(model):
     for i in range(val_batch):
         names.append(val_data[i % len(val_data)])
 
-    loss = generate_loss(model, names)
-    print(f"val loss: {loss.item():.4f}")
-    return loss
+    return generate_loss(model, names)
+
+@torch.no_grad()
+def validate_all(model):
+    total_loss = 0
+    total_tokens = 0
+
+    for names in batched(val_data, val_batch):
+        loss_avg = generate_loss(model, names).item()
+        tokens = sum(len(name) + 1 for name in names) # +1 for SEP
+        total_tokens += tokens
+        total_loss += tokens * loss_avg
+
+    return total_loss / total_tokens
+
 
 def train(model, optimizer):
     name_idx = 0  # cursor into dataset, advances across steps
@@ -214,34 +226,38 @@ def train(model, optimizer):
         loss.backward()
         optimizer.step()
 
-        if step % 1000 == 0:
-            print(f"step: {step}, training loss: {loss.item():.4f}")
-            validate(model)
+        if step % 1000 == 0 or step == steps - 1:
+            val_loss = validate(model)
+            print(f"step: {step}, training loss: {loss.item():.4f}, val loss: {val_loss.item():.4f}")
 
+@torch.no_grad()
 def generate(model):
     print("\nGeneration samples:")
     # generate a few samples
     samples = 10
-    with torch.no_grad():
-        for _ in range(samples):
-            name = ""
-            tokens = torch.tensor([ctoi(SEP)])
-            while True:
-                logits = model(tokens.unsqueeze(0)) # unsqueeze for batching
-                logits = logits[0][-1] # only care about the last sampled token
-                new_token = torch.distributions.Categorical(logits=logits).sample()
-                tokens = torch.cat([tokens, torch.tensor([new_token])])
-                char = itoc(new_token.item())
-                if char == SEP:
-                    break
-                name += char
-                if len(name) >= max_sequence - 1:
-                    break
-            print(name)
+    for _ in range(samples):
+        name = ""
+        tokens = torch.tensor([ctoi(SEP)])
+        while True:
+            logits = model(tokens.unsqueeze(0)) # unsqueeze for batching
+            logits = logits[0][-1] # only care about the last sampled token
+            new_token = torch.distributions.Categorical(logits=logits).sample()
+            tokens = torch.cat([tokens, torch.tensor([new_token])])
+            char = itoc(new_token.item())
+            if char == SEP:
+                break
+            name += char
+            if len(name) >= max_sequence - 1:
+                break
+        print(name)
 
 if __name__ == '__main__':
     model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count)
     optimizer = Adam(model.parameters(), lr=1e-3)
 
     train(model, optimizer)
+
+    loss = validate_all(model)
+    print(f"Final loss: {loss}")
+
     generate(model)
