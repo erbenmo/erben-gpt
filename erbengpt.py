@@ -8,6 +8,7 @@ import torch
 import random
 import math
 from itertools import batched
+import argparse
 
 # download dataset
 def download_dataset():
@@ -31,21 +32,9 @@ def split_dataset(dataset):
     split = int(l * 0.9)
     return dataset[0:split], dataset[split:]
 
-dataset = download_dataset()
-train_data, val_data = split_dataset(dataset)
-max_sequence = max(len(name) for name in dataset) + 1
-chars = sorted(list(set("".join(dataset))))
-SEP = '\n'
-chars.append(SEP)
-print(chars)
-vocab_size = len(chars)
-ctoi = lambda c: chars.index(c)
-itoc = lambda i: chars[i]
-
-# train a bigram look up table, basically for each token store the probability of all next token
-class BigramModel(nn.Embedding):
-    def __init__(self, vocab_size):
-        super().__init__(vocab_size, vocab_size)
+steps = 10000
+batch = 32
+val_batch = 256
 
 class Transformer(nn.Module):
     def __init__(self, feature_count, head_count):
@@ -117,8 +106,23 @@ class Transformer(nn.Module):
 
 # train a language model. token id is converted into 16 features and we use a linear layer to predict next token
 class LanguageModel(nn.Module):
-    def __init__(self, vocab_size, max_sequence, feature_count, head_count, layer_count):
+    SEP = "\n"
+
+    def __init__(self, chars, max_sequence, feature_count = 16, head_count = 4, layer_count = 2):
         super().__init__()
+
+        self.chars = chars.copy()
+        self.chars.append(self.SEP)
+        print(self.chars)
+
+        self.ctoi = lambda c: self.chars.index(c)
+        self.itoc = lambda i: self.chars[i]
+
+        vocab_size = len(self.chars)
+        self.max_sequence = max_sequence
+        self.feature_count = feature_count
+        self.head_count = head_count
+        self.layer_count = layer_count
 
         if feature_count % head_count > 0:
             raise ValueError(f"feature count {feature_count} must be multiplier of head_count {head_count}")
@@ -159,105 +163,131 @@ class LanguageModel(nn.Module):
         # final output: (B, N, vocab_size)
         return self.linear(features)
 
-# model = BigramModel(vocab_size)
+    def save(self, ckpt_path):
+        ckpt = {'weight' : self.state_dict(),
+                'chars' : self.chars[:len(self.chars) - 1], # remove SEP
+                'max_sequence' : self.max_sequence,
+                'feature_count' : self.feature_count,
+                'head_count' : self.head_count,
+                "layer_count" : self.layer_count}
+        torch.save(ckpt, ckpt_path)
 
-feature_count = 16
-head_count = 4
-layer_count = 2
-steps = 10000
-batch = 32
-val_batch = 256
-
-def generate_loss(model, names):
-    # input:   SEP, E, M, M, A
-    # target:  E,   M, M, A, SEP
-    input = [torch.tensor([ctoi(c) for c in list(SEP + name)])
-            for name in names]
-    target = [torch.tensor([ctoi(c) for c in list(name + SEP)])
-            for name in names]
-    # padding: SEP -> -100 (and target == -100 is ignored for training)
-    input = pad_sequence(input, batch_first=True, padding_value=torch.tensor(ctoi(SEP)))
-    target = pad_sequence(target, batch_first=True, padding_value=torch.tensor(-100))
-
-    # forward pass - train on this input
-    logits = model(input) # shape: [batch, max(len(name))+1, vocab_size]
-    # cross entropy expects shape [batch, vocab_size, max(len(name))+1]
-    logits = logits.transpose(1, 2)
-    loss = F.cross_entropy(logits, target, ignore_index = -100)
-    return loss
-
-@torch.no_grad()
-def validate(model):
-    # validation batch
-    names = []
-    for i in range(val_batch):
-        names.append(val_data[i % len(val_data)])
-
-    return generate_loss(model, names)
-
-@torch.no_grad()
-def validate_all(model):
-    total_loss = 0
-    total_tokens = 0
-
-    for names in batched(val_data, val_batch):
-        loss_avg = generate_loss(model, names).item()
-        tokens = sum(len(name) + 1 for name in names) # +1 for SEP
-        total_tokens += tokens
-        total_loss += tokens * loss_avg
-
-    return total_loss / total_tokens
+    @staticmethod
+    def load(ckpt_path):
+        ckpt = torch.load(ckpt_path)
+        model = LanguageModel(ckpt['chars'],
+                              ckpt['max_sequence'],
+                              ckpt['feature_count'],
+                              ckpt['head_count'],
+                              ckpt['layer_count'])
+        model.load_state_dict(ckpt['weight'])
+        return model
 
 
-def train(model, optimizer):
-    name_idx = 0  # cursor into dataset, advances across steps
-    for step in range(steps):
-        # training batch
+    def _generate_loss(self, names):
+        # input:   SEP, E, M, M, A
+        # target:  E,   M, M, A, SEP
+        input = [torch.tensor([self.ctoi(c) for c in list(self.SEP + name)])
+                for name in names]
+        target = [torch.tensor([self.ctoi(c) for c in list(name + self.SEP)])
+                for name in names]
+        # padding: SEP -> -100 (and target == -100 is ignored for training)
+        input = pad_sequence(input, batch_first=True, padding_value=torch.tensor(self.ctoi(self.SEP)))
+        target = pad_sequence(target, batch_first=True, padding_value=torch.tensor(-100))
+
+        # forward pass - train on this input
+        logits = self(input) # shape: [batch, max(len(name))+1, vocab_size]
+        # cross entropy expects shape [batch, vocab_size, max(len(name))+1]
+        logits = logits.transpose(1, 2)
+        loss = F.cross_entropy(logits, target, ignore_index = -100)
+        return loss
+
+    @torch.no_grad()
+    def validate(self):
+        # validation batch
         names = []
-        for _ in range(batch):
-            names.append(train_data[name_idx % len(train_data)])
-            name_idx += 1
+        for i in range(val_batch):
+            names.append(val_data[i % len(val_data)])
 
-        # forward pass - run model on prefix, generate loss against target
-        loss = generate_loss(model, names)
+        return self._generate_loss(names)
 
-        # backward pass - find gradient, apply loss
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    @torch.no_grad()
+    def validate_all(self):
+        total_loss = 0
+        total_tokens = 0
 
-        if step % 1000 == 0 or step == steps - 1:
-            val_loss = validate(model)
-            print(f"step: {step}, training loss: {loss.item():.4f}, val loss: {val_loss.item():.4f}")
+        for names in batched(val_data, val_batch):
+            loss_avg = self._generate_loss(names).item()
+            tokens = sum(len(name) + 1 for name in names) # +1 for SEP
+            total_tokens += tokens
+            total_loss += tokens * loss_avg
 
-@torch.no_grad()
-def generate(model):
-    print("\nGeneration samples:")
-    # generate a few samples
-    samples = 10
-    for _ in range(samples):
-        name = ""
-        tokens = torch.tensor([ctoi(SEP)])
-        while True:
-            logits = model(tokens.unsqueeze(0)) # unsqueeze for batching
-            logits = logits[0][-1] # only care about the last sampled token
-            new_token = torch.distributions.Categorical(logits=logits).sample()
-            tokens = torch.cat([tokens, torch.tensor([new_token])])
-            char = itoc(new_token.item())
-            if char == SEP:
-                break
-            name += char
-            if len(name) >= max_sequence - 1:
-                break
-        print(name)
+        return total_loss / total_tokens
+
+
+    def train_mode(self, optimizer):
+        name_idx = 0  # cursor into dataset, advances across steps
+        for step in range(steps):
+            # training batch
+            names = []
+            for _ in range(batch):
+                names.append(train_data[name_idx % len(train_data)])
+                name_idx += 1
+
+            # forward pass - run model on prefix, generate loss against target
+            loss = self._generate_loss(names)
+
+            # backward pass - find gradient, apply loss
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if step % 1000 == 0 or step == steps - 1:
+                val_loss = self.validate()
+                print(f"step: {step}, training loss: {loss.item():.4f}, val loss: {val_loss.item():.4f}")
+
+    @torch.no_grad()
+    def generate(self):
+        print("\nGeneration samples:")
+        # generate a few samples
+        samples = 10
+        for _ in range(samples):
+            name = ""
+            tokens = torch.tensor([self.ctoi(self.SEP)])
+            while True:
+                logits = self(tokens.unsqueeze(0)) # unsqueeze for batching
+                logits = logits[0][-1] # only care about the last sampled token
+                new_token = torch.distributions.Categorical(logits=logits).sample()
+                tokens = torch.cat([tokens, torch.tensor([new_token])])
+                char = self.itoc(new_token.item())
+                if char == self.SEP:
+                    break
+                name += char
+                if len(name) >= self.max_sequence - 1:
+                    break
+            print(name)
 
 if __name__ == '__main__':
-    model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count)
-    optimizer = Adam(model.parameters(), lr=1e-3)
 
-    train(model, optimizer)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--load", action="store_true", help="load checkpoint instead of training")
+    parser.add_argument("--ckpt", default="./ckpt-file")
+    args = parser.parse_args()
 
-    loss = validate_all(model)
-    print(f"Final loss: {loss}")
+    if not args.load:
+        dataset = download_dataset()
+        train_data, val_data = split_dataset(dataset)
+        chars = sorted(list(set("".join(dataset))))
+        max_sequence = max(len(name) for name in dataset) + 1
+        model = LanguageModel(chars, max_sequence)
+        optimizer = Adam(model.parameters(), lr=1e-3)
+        model.train_mode(optimizer)
 
-    generate(model)
+        loss = model.validate_all()
+        print(f"Final loss: {loss}")
+
+        model.save(args.ckpt)
+    else:
+        model = LanguageModel.load(args.ckpt)
+
+    model.generate()
