@@ -10,9 +10,6 @@ import math
 from itertools import batched
 import argparse
 
-steps = 10000
-batch = 32
-val_batch = 256
 
 # download dataset
 def download_dataset():
@@ -203,7 +200,7 @@ class LanguageModel(nn.Module):
         return loss
 
     @torch.no_grad()
-    def validate(self):
+    def validate(self, val_data, val_batch):
         # validation batch
         names = []
         for i in range(val_batch):
@@ -212,7 +209,7 @@ class LanguageModel(nn.Module):
         return self._generate_loss(names)
 
     @torch.no_grad()
-    def validate_all(self):
+    def validate_all(self, val_data, val_batch):
         total_loss = 0
         total_tokens = 0
 
@@ -225,7 +222,7 @@ class LanguageModel(nn.Module):
         return total_loss / total_tokens
 
 
-    def train_mode(self, optimizer):
+    def train_mode(self, optimizer, train_data, val_data, steps, batch = 32, val_batch = 256):
         name_idx = 0  # cursor into dataset, advances across steps
         for step in range(steps):
             # training batch
@@ -243,7 +240,7 @@ class LanguageModel(nn.Module):
             optimizer.step()
 
             if step % 1000 == 0 or step == steps - 1:
-                val_loss = self.validate()
+                val_loss = self.validate(val_data, val_batch)
                 print(f"step: {step}, training loss: {loss.item():.4f}, val loss: {val_loss.item():.4f}")
 
     @torch.no_grad()
@@ -268,6 +265,7 @@ class LanguageModel(nn.Module):
             print(name)
 
 if __name__ == '__main__':
+    steps = 10000
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", action="store_true", help="load checkpoint instead of training")
@@ -282,20 +280,20 @@ if __name__ == '__main__':
 
     if not args.load:
         dataset = download_dataset()
-        train_data, val_data = split_dataset(dataset)
         chars = sorted(list(set("".join(dataset))))
         max_sequence = max(len(name) for name in dataset) + 1
+        train_data, val_data = split_dataset(dataset)
 
         for (feature, layer) in feature_layers:
             print(f"Feature: {feature}, Layer: {layer}")
             model = LanguageModel(chars, max_sequence, feature_count = feature, head_count = 4, layer_count = layer)
             optimizer = Adam(model.parameters(), lr=1e-3)
-            model.train_mode(optimizer)
+            model.train_mode(optimizer, train_data, val_data, steps)
 
             parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
             print(f"Total parameter: {parameters}")
 
-            loss = model.validate_all()
+            loss = model.validate_all(val_data, 256)
             print(f"Final loss: {loss}")
 
             model.save(f"{args.ckpt}.f_{feature}.l_{layer}")
