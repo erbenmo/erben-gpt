@@ -10,6 +10,10 @@ import math
 from itertools import batched
 import argparse
 
+steps = 10000
+batch = 32
+val_batch = 256
+
 # download dataset
 def download_dataset():
     input_file = "input.txt"
@@ -31,10 +35,6 @@ def split_dataset(dataset):
     l = len(dataset)
     split = int(l * 0.9)
     return dataset[0:split], dataset[split:]
-
-steps = 10000
-batch = 32
-val_batch = 256
 
 class Transformer(nn.Module):
     def __init__(self, feature_count, head_count):
@@ -271,23 +271,36 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", action="store_true", help="load checkpoint instead of training")
+    parser.add_argument("--experiment", action="store_true", help="experiment with different feature & layer count")
     parser.add_argument("--ckpt", default="./ckpt-file")
     args = parser.parse_args()
+
+    if args.experiment:
+        feature_layers = [(16, 2), (32, 2), (32, 4)]
+    else:
+        feature_layers = [(16, 2)]
 
     if not args.load:
         dataset = download_dataset()
         train_data, val_data = split_dataset(dataset)
         chars = sorted(list(set("".join(dataset))))
         max_sequence = max(len(name) for name in dataset) + 1
-        model = LanguageModel(chars, max_sequence)
-        optimizer = Adam(model.parameters(), lr=1e-3)
-        model.train_mode(optimizer)
 
-        loss = model.validate_all()
-        print(f"Final loss: {loss}")
+        for (feature, layer) in feature_layers:
+            print(f"Feature: {feature}, Layer: {layer}")
+            model = LanguageModel(chars, max_sequence, feature_count = feature, head_count = 4, layer_count = layer)
+            optimizer = Adam(model.parameters(), lr=1e-3)
+            model.train_mode(optimizer)
 
-        model.save(args.ckpt)
+            parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"Total parameter: {parameters}")
+
+            loss = model.validate_all()
+            print(f"Final loss: {loss}")
+
+            model.save(f"{args.ckpt}.f_{feature}.l_{layer}")
+            print("----------------------------------------")
     else:
-        model = LanguageModel.load(args.ckpt)
-
-    model.generate()
+        for (feature, layer) in feature_layers:
+            model = LanguageModel.load(f"{args.ckpt}.f_{feature}.l_{layer}")
+            model.generate()
