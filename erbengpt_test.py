@@ -49,3 +49,31 @@ def test_causal_mask():
     # SEP, e, m, m should match
     for i in range(4):
         torch.testing.assert_close(logits[0][i], logits[1][i])
+
+def test_save_load(tmp_path):
+    name = "emma"
+    chars = ["e", "m", "a"]
+    max_sequence = 5
+
+    model1 = LanguageModel(chars, max_sequence, 8, 2, 1)
+    input = torch.tensor([model1.ctoi(c) for c in list(model1.SEP + name)])
+    input = torch.stack([input])
+    with torch.no_grad():
+        logits_old = model1(input)
+
+    # save & load
+    file = tmp_path / "ckpt.file"
+    model1.save(file)
+    model2 = LanguageModel.load(file)
+
+    # verify model metadata are the same
+    assert model1.chars == model2.chars
+    assert model1.max_sequence == model2.max_sequence
+    assert model1.feature_count == model2.feature_count
+    assert model1.head_count == model2.head_count
+    assert model1.layer_count == model2.layer_count
+
+    # verify logits are the same
+    with torch.no_grad():
+        logits_new = model2(input)
+    torch.testing.assert_close(logits_old, logits_new)
