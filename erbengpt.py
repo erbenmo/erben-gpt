@@ -33,6 +33,25 @@ def split_dataset(dataset):
     split = int(l * 0.9)
     return dataset[0:split], dataset[split:]
 
+def causal_attention(q, k, v):
+    # q, k, v: (B, N, H)
+    assert k.shape == v.shape and v.shape == q.shape
+    head_size = k.shape[-1]
+
+    # each q should attend to every k, (B, N, H) @ (B, H, N) -> (B, N, N)
+    logits = q @ k.transpose(1, 2) / math.sqrt(head_size)
+
+    # then mask attention for (q, later k) to be -inf to ignore them (self attention)
+    n = logits.shape[1]
+    mask = torch.triu(torch.ones(n, n, dtype=torch.bool), diagonal=1)
+    logits = logits.masked_fill(mask, float('-inf'))
+
+    # finally calculate weight and multiple with v and sum
+    # (B, N, N) @ (B, N, H) -> (B, N, H)
+    weight = torch.softmax(logits, dim=-1)
+    attention = weight @ v
+    return attention
+
 class Transformer(nn.Module):
     def __init__(self, feature_count, head_count):
         super().__init__()
@@ -70,23 +89,12 @@ class Transformer(nn.Module):
         # multi-head attention
         outputs = []
         for i in range(self.head_count):
-            # generate q, k, v -> (B, N, H)
+            # self-attention: generate q, k, v -> (B, N, H)
             q = self.q[i](normalized_features)
             k = self.k[i](normalized_features)
             v = self.v[i](normalized_features)
 
-            # each q should attend to every k, (B, N, H) @ (B, H, N) -> (B, N, N)
-            logits = q @ k.transpose(1, 2) / math.sqrt(self.head_size)
-
-            # then mask attention for (q, later k) to be -inf to ignore them (self attention)
-            n = logits.shape[1]
-            mask = torch.triu(torch.ones(n, n, dtype=torch.bool), diagonal=1)
-            logits = logits.masked_fill(mask, float('-inf'))
-
-            # finally calculate weight and multiple with v and sum
-            # (B, N, N) @ (B, N, H) -> (B, N, H)
-            weight = torch.softmax(logits, dim=-1)
-            attention = weight @ v
+            attention = causal_attention(q, k, v)
             outputs.append(attention)
 
         # merge all (B, N, H) into (B, N, 16)

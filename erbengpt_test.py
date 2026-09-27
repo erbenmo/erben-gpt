@@ -1,6 +1,7 @@
-from erbengpt import download_dataset, split_dataset
+from erbengpt import download_dataset, split_dataset, causal_attention
 from erbengpt import LanguageModel
 from torch.optim.adam import Adam
+import torch.nn.functional as F
 import torch
 import pytest
 
@@ -92,3 +93,25 @@ def test_gradient():
     for (name, params) in model.named_parameters():
         assert params.grad is not None, f"grad is None for {name}"
         assert torch.isfinite(params.grad).all(), f"grad is not finite for {name}, grad: {params.grad}"
+
+def test_causal_attention():
+    B, N, H = 10, 10, 16
+
+    q = torch.randn(B, N, H, requires_grad = True)
+    k = torch.randn(B, N, H, requires_grad = True)
+    v = torch.randn(B, N, H, requires_grad = True)
+    q2 = q.detach().clone().requires_grad_(True)
+    k2 = k.detach().clone().requires_grad_(True)
+    v2 = v.detach().clone().requires_grad_(True)
+
+    # calculate attention using our utility vs pytorch native
+    attention1 = causal_attention(q, k, v)
+    attention2 = F.scaled_dot_product_attention(q2.unsqueeze(1), k2.unsqueeze(1), v2.unsqueeze(1), is_causal = True)
+    torch.testing.assert_close(attention1, attention2.squeeze(1), msg = f"attention doesn't match: {attention1}, {attention2.squeeze(1)}")
+
+    # do a backward run and verify gradient also match
+    attention1.sum().backward()
+    attention2.sum().backward()
+    torch.testing.assert_close(q.grad, q2.grad, msg = f"q gradient doesn't match: {q.grad}, {q2.grad}")
+    torch.testing.assert_close(k.grad, k2.grad, msg = f"k gradient doesn't match: {k.grad}, {k2.grad}")
+    torch.testing.assert_close(v.grad, v2.grad, msg = f"v gradient doesn't match: {v.grad}, {v2.grad}")
