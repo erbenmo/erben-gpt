@@ -77,3 +77,18 @@ def test_save_load(tmp_path):
     with torch.no_grad():
         logits_new = model2(input)
     torch.testing.assert_close(logits_old, logits_new)
+
+def test_gradient():
+    chars = ["e", "m", "a"]
+    names = ["emma", "em"]
+    max_sequence = 5
+
+    # train a small model with 1 step
+    model = LanguageModel(chars, max_sequence, 4, 1, 1)
+    loss = model._generate_loss(names)
+    loss.backward()
+
+    # verify the gradient is not None and is finite
+    for (name, params) in model.named_parameters():
+        assert params.grad is not None, f"grad is None for {name}"
+        assert torch.isfinite(params.grad).all(), f"grad is not finite for {name}, grad: {params.grad}"
