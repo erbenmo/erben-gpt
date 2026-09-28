@@ -144,3 +144,58 @@ def test_model_shape():
 
     # empty string, batch of 1
     model_shape_helper([""])
+
+def test_parameter_count():
+    names = ["emma", "tony"]
+    chars = list(set([c for name in names for c in name]))
+    max_sequence = max(len(name) for name in names) + 1
+    V = len(chars) + 1 # +1 for SEP
+
+    model = LanguageModel(chars, max_sequence, feature_count = 24, head_count = 3, layer_count = 3)
+    D = model.feature_count
+    hc = model.head_count
+    H = int(D / hc)
+    L = model.layer_count
+
+    # token embedding: each V embeds to D
+    token_embedding = V * D
+
+    # positional embedding: max_sequence embeds -> D
+    position_embedding = max_sequence * D
+
+    # Transformer
+    transformer = 0
+
+    # 0. layer norm
+    transformer += 2 * D
+
+    # 1. single head (Q, K, V), each one is a linear layer that converts D -> H,
+    # so D * H for weight (no bias)
+    attention = (D * H) * 3
+
+    # 2. multiple heads
+    attention *= hc
+    transformer += attention
+
+    # 3. output linear projection: feature count -> feature count
+    output = D * D
+    transformer += output
+
+    # 4. MLP (linear up + linear down) w/ layer norm
+    mlp = 0
+    mlp += 2 * D # layer norm
+    mlp += D * D * 4 + 4 * D # D -> 4 * D
+    mlp += D * D * 4 + D # 4 * D -> D
+    transformer += mlp
+
+    # 5. layer count multiplier
+    transformer *= L
+
+    # Output linear w/ layer norm
+    output_processing = 2 * D
+    # Linear projection from D -> vocab
+    output_processing += D * V + V
+
+    # get final parameter count, and assert it matches
+    count = token_embedding + position_embedding + transformer + output_processing
+    assert count == sum(p.numel() for p in model.parameters() if p.requires_grad)
