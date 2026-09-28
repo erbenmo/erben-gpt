@@ -251,8 +251,25 @@ class LanguageModel(nn.Module):
                 val_loss = self.validate(val_data, val_batch)
                 print(f"step: {step}, training loss: {loss.item():.4f}, val loss: {val_loss.item():.4f}")
 
+    @staticmethod
+    def select_next_token(logits, greedy, temperature):
+        # logits.shape = (vocab_size)
+
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError(f"temperature {temperature} is invalid")
+
+        if greedy:
+            return torch.argmax(logits)
+
+        # sample by probability
+        logits = logits / temperature
+        probability = torch.softmax(logits, dim = 0)
+        # sample 1 token
+        return torch.multinomial(probability, num_samples=1)[0]
+
     @torch.no_grad()
-    def generate(self):
+    def generate(self, greedy = False, temperature = 1):
+        names = []
         print("\nGeneration samples:")
         # generate a few samples
         samples = 10
@@ -262,7 +279,7 @@ class LanguageModel(nn.Module):
             while True:
                 logits = self(tokens.unsqueeze(0)) # unsqueeze for batching
                 logits = logits[0][-1] # only care about the last sampled token
-                new_token = torch.distributions.Categorical(logits=logits).sample()
+                new_token = LanguageModel.select_next_token(logits, greedy, temperature)
                 tokens = torch.cat([tokens, torch.tensor([new_token])])
                 char = self.itoc(new_token.item())
                 if char == self.SEP:
@@ -270,15 +287,20 @@ class LanguageModel(nn.Module):
                 name += char
                 if len(name) >= self.max_sequence - 1:
                     break
+            names.append(name)
             print(name)
+        return names
+
 
 if __name__ == '__main__':
     steps = 10000
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--load", action="store_true", help="load checkpoint instead of training")
-    parser.add_argument("--experiment", action="store_true", help="experiment with different feature & layer count")
-    parser.add_argument("--ckpt", default="./ckpt-file")
+    parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
+    parser.add_argument("--experiment", action = "store_true", help = "experiment with different feature & layer count")
+    parser.add_argument("--ckpt", default = "./ckpt-file")
+    parser.add_argument("--greedy", action = "store_true", help = "use greedy sampling")
+    parser.add_argument("--temperature", type = float, default=1.0, help = "sampling temperature")
     args = parser.parse_args()
 
     if args.experiment:
@@ -306,7 +328,9 @@ if __name__ == '__main__':
 
             model.save(f"{args.ckpt}.f_{feature}.l_{layer}")
             print("----------------------------------------")
+
+            model.generate(args.greedy, args.temperature)
     else:
         for (feature, layer) in feature_layers:
             model = LanguageModel.load(f"{args.ckpt}.f_{feature}.l_{layer}")
-            model.generate()
+            model.generate(args.greedy, args.temperature)

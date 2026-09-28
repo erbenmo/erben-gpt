@@ -199,3 +199,25 @@ def test_parameter_count():
     # get final parameter count, and assert it matches
     count = token_embedding + position_embedding + transformer + output_processing
     assert count == sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def test_generation():
+
+    logits = torch.tensor([1, 5, 2])
+    new_token = LanguageModel.select_next_token(logits, True, 1.0)
+    assert new_token == 1
+
+    chars = [chr(c) for c in range(ord('a'), ord('z') + 1)]
+    max_sequence = 10
+
+    model = LanguageModel(chars, max_sequence)
+    names = model.generate(greedy=True)
+
+    assert len(set(names)) == 1
+
+def test_invalid_generation_temperature():
+    chars = [chr(c) for c in range(ord('a'), ord('z') + 1)]
+    max_sequence = 10
+
+    model = LanguageModel(chars, max_sequence)
+    with pytest.raises(ValueError):
+        model.generate(temperature = 0.0)
