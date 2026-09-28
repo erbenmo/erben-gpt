@@ -94,9 +94,7 @@ def test_gradient():
         assert params.grad is not None, f"grad is None for {name}"
         assert torch.isfinite(params.grad).all(), f"grad is not finite for {name}, grad: {params.grad}"
 
-def test_causal_attention():
-    B, N, H = 10, 10, 16
-
+def causal_attention_helper(B, N, H):
     q = torch.randn(B, N, H, requires_grad = True)
     k = torch.randn(B, N, H, requires_grad = True)
     v = torch.randn(B, N, H, requires_grad = True)
@@ -115,3 +113,34 @@ def test_causal_attention():
     torch.testing.assert_close(q.grad, q2.grad, msg = f"q gradient doesn't match: {q.grad}, {q2.grad}")
     torch.testing.assert_close(k.grad, k2.grad, msg = f"k gradient doesn't match: {k.grad}, {k2.grad}")
     torch.testing.assert_close(v.grad, v2.grad, msg = f"v gradient doesn't match: {v.grad}, {v2.grad}")
+
+def test_causal_attention():
+    causal_attention_helper(B=10, N=10, H=16)
+    causal_attention_helper(B=10, N=1, H=16)
+    causal_attention_helper(B=1, N=1, H=16)
+
+def model_shape_helper(names):
+    chars = list(set([c for name in names for c in name]))
+    max_sequence = max(len(name) for name in names) + 1
+    B = len(names)
+    N = max_sequence
+    V = len(chars) + 1 # +1 for SEP
+
+    # assert input shape (skip padding for now)
+    model = LanguageModel(chars, max_sequence)
+    input = [torch.tensor([model.ctoi(c) for c in list(model.SEP + name)])
+             for name in names]
+    input = torch.stack(input)
+    assert input.shape == torch.Size((B, N))
+
+    # assert logits shape
+    with torch.no_grad():
+        logits = model(input)
+    assert logits.shape == torch.Size((B, N, V))
+
+def test_model_shape():
+    # create input of 2 names
+    model_shape_helper(["emma", "tony"])
+
+    # empty string, batch of 1
+    model_shape_helper([""])
