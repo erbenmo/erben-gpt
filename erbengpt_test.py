@@ -4,6 +4,7 @@ from torch.optim.adam import Adam
 import torch.nn.functional as F
 import torch
 import pytest
+import copy
 
 @pytest.fixture
 def dataset():
@@ -221,3 +222,31 @@ def test_invalid_generation_temperature():
     model = LanguageModel(chars, max_sequence)
     with pytest.raises(ValueError):
         model.generate(temperature = 0.0)
+
+def test_manual_vs_sdpa_attention():
+    names = ["emma", "henry", "natalie"]
+    chars = list(set([c for name in names for c in name]))
+    max_sequence = max(len(name) for name in names) + 1
+
+    # create model 2 to be a clone of model1, but use sdpa
+    model1 = LanguageModel(chars, max_sequence, attention_mode = "manual")
+    model2 = LanguageModel(chars, max_sequence, attention_mode = "sdpa")
+    model2.load_state_dict(copy.deepcopy(model1.state_dict()))
+
+    # generate loss on both models - should look similar
+    loss1 = model1._generate_loss(names)
+    loss2 = model2._generate_loss(names)
+    torch.testing.assert_close(loss1, loss2, msg = f"loss should be similar: loss1: {loss1}, loss2: {loss2}")
+
+    # calculate gradient for loss - should be similar
+    loss1.backward()
+    loss2.backward()
+    parameters1 = {name : p.grad for name, p in model1.named_parameters()}
+    parameters2 = {name : p.grad for name, p in model2.named_parameters()}
+
+    assert parameters1.keys() == parameters2.keys(), f"parameters key not equal)"
+    for (name, p1) in parameters1.items():
+        p2 = parameters2[name]
+        assert p1 is not None
+        assert p2 is not None
+        torch.testing.assert_close(p1, p2, msg = f"grad should be similar for {name}: grad1: {p1}, grad2: {p2}")
