@@ -65,7 +65,7 @@ def test_save_load(tmp_path):
     # save & load
     file = tmp_path / "ckpt.file"
     model1.save(file)
-    model2 = LanguageModel.load(file)
+    model2 = LanguageModel.load(file, "sdpa")
 
     # verify model metadata are the same
     assert model1.chars == model2.chars

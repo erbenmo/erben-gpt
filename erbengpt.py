@@ -53,11 +53,15 @@ def causal_attention(q, k, v):
     return attention
 
 class Transformer(nn.Module):
-    def __init__(self, feature_count, head_count):
+    def __init__(self, feature_count, head_count, attention_mode):
         super().__init__()
 
         if feature_count % head_count > 0:
             raise ValueError(f"feature count {feature_count} must be multiplier of head_count {head_count}")
+
+        if attention_mode != "sdpa" and attention_mode != "manual":
+            raise ValueError(f"invalid attention_mode: {attention_mode} must be either manual or sdpa")
+        self.attention_mode = attention_mode
 
         self.ln = nn.LayerNorm(feature_count)
 
@@ -94,7 +98,10 @@ class Transformer(nn.Module):
             k = self.k[i](normalized_features)
             v = self.v[i](normalized_features)
 
-            attention = causal_attention(q, k, v)
+            if self.attention_mode == "sdpa":
+                attention = F.scaled_dot_product_attention(q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1), is_causal = True).squeeze(1)
+            else:
+                attention = causal_attention(q, k, v)
             outputs.append(attention)
 
         # merge all (B, N, H) into (B, N, 16)
@@ -113,12 +120,11 @@ class Transformer(nn.Module):
 class LanguageModel(nn.Module):
     SEP = "\n"
 
-    def __init__(self, chars, max_sequence, feature_count = 16, head_count = 4, layer_count = 2):
+    def __init__(self, chars, max_sequence, feature_count = 16, head_count = 4, layer_count = 2, attention_mode = "manual"):
         super().__init__()
 
         self.chars = chars.copy()
         self.chars.append(self.SEP)
-        print(self.chars)
 
         self.ctoi = lambda c: self.chars.index(c)
         self.itoc = lambda i: self.chars[i]
@@ -141,7 +147,7 @@ class LanguageModel(nn.Module):
         # transformer: feature -> feature
         self.transformers = nn.ModuleList()
         for _ in range(layer_count):
-            self.transformers.append(Transformer(feature_count, head_count))
+            self.transformers.append(Transformer(feature_count, head_count, attention_mode))
 
         # final LayerNorm before feature -> token mapping
         self.ln_final = nn.LayerNorm(feature_count)
@@ -178,13 +184,14 @@ class LanguageModel(nn.Module):
         torch.save(ckpt, ckpt_path)
 
     @staticmethod
-    def load(ckpt_path):
+    def load(ckpt_path, attention_mode):
         ckpt = torch.load(ckpt_path)
         model = LanguageModel(ckpt['chars'],
                               ckpt['max_sequence'],
                               ckpt['feature_count'],
                               ckpt['head_count'],
-                              ckpt['layer_count'])
+                              ckpt['layer_count'],
+                              attention_mode)
         model.load_state_dict(ckpt['weight'])
         return model
 
@@ -301,6 +308,8 @@ if __name__ == '__main__':
     parser.add_argument("--ckpt", default = "./ckpt-file")
     parser.add_argument("--greedy", action = "store_true", help = "use greedy sampling")
     parser.add_argument("--temperature", type = float, default=1.0, help = "sampling temperature")
+    parser.add_argument("--attention-mode", default = "manual", help = "manual attention vs sdpa")
+
     args = parser.parse_args()
 
     if args.experiment:
@@ -316,7 +325,7 @@ if __name__ == '__main__':
 
         for (feature, layer) in feature_layers:
             print(f"Feature: {feature}, Layer: {layer}")
-            model = LanguageModel(chars, max_sequence, feature_count = feature, head_count = 4, layer_count = layer)
+            model = LanguageModel(chars, max_sequence, feature_count = feature, head_count = 4, layer_count = layer, attention_mode = args.attention_mode)
             optimizer = Adam(model.parameters(), lr=1e-3)
             model.train_mode(optimizer, train_data, val_data, steps)
 
@@ -332,5 +341,5 @@ if __name__ == '__main__':
             model.generate(args.greedy, args.temperature)
     else:
         for (feature, layer) in feature_layers:
-            model = LanguageModel.load(f"{args.ckpt}.f_{feature}.l_{layer}")
+            model = LanguageModel.load(f"{args.ckpt}.f_{feature}.l_{layer}", args.attention_mode)
             model.generate(args.greedy, args.temperature)
