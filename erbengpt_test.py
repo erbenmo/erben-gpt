@@ -1,4 +1,4 @@
-from erbengpt import download_dataset, split_dataset, causal_attention
+from erbengpt import download_dataset, split_dataset, causal_attention_multi_head
 from erbengpt import LanguageModel
 from torch.optim.adam import Adam
 import torch.nn.functional as F
@@ -96,18 +96,18 @@ def test_gradient():
         assert params.grad is not None, f"grad is None for {name}"
         assert torch.isfinite(params.grad).all(), f"grad is not finite for {name}, grad: {params.grad}"
 
-def causal_attention_helper(B, N, H):
-    q = torch.randn(B, N, H, requires_grad = True)
-    k = torch.randn(B, N, H, requires_grad = True)
-    v = torch.randn(B, N, H, requires_grad = True)
+def causal_attention_helper(B, HC, N, HS):
+    q = torch.randn(B, HC, N, HS, requires_grad = True)
+    k = torch.randn(B, HC, N, HS, requires_grad = True)
+    v = torch.randn(B, HC, N, HS, requires_grad = True)
     q2 = q.detach().clone().requires_grad_(True)
     k2 = k.detach().clone().requires_grad_(True)
     v2 = v.detach().clone().requires_grad_(True)
 
     # calculate attention using our utility vs pytorch native
-    attention1 = causal_attention(q, k, v)
-    attention2 = F.scaled_dot_product_attention(q2.unsqueeze(1), k2.unsqueeze(1), v2.unsqueeze(1), is_causal = True)
-    torch.testing.assert_close(attention1, attention2.squeeze(1), msg = f"attention doesn't match: {attention1}, {attention2.squeeze(1)}")
+    attention1 = causal_attention_multi_head(q, k, v)
+    attention2 = F.scaled_dot_product_attention(q2, k2, v2, is_causal = True)
+    torch.testing.assert_close(attention1, attention2, msg = f"attention doesn't match: {attention1}, {attention2}")
 
     # do a backward run and verify gradient also match
     attention1.sum().backward()
@@ -117,9 +117,9 @@ def causal_attention_helper(B, N, H):
     torch.testing.assert_close(v.grad, v2.grad, msg = f"v gradient doesn't match: {v.grad}, {v2.grad}")
 
 def test_causal_attention():
-    causal_attention_helper(B=10, N=10, H=16)
-    causal_attention_helper(B=10, N=1, H=16)
-    causal_attention_helper(B=1, N=1, H=16)
+    causal_attention_helper(B=10, HC = 4, N=10, HS=16)
+    causal_attention_helper(B=10, HC = 4, N=1, HS=16)
+    causal_attention_helper(B=1, HC = 4, N=1, HS=16)
 
 def model_shape_helper(names):
     chars = list(set([c for name in names for c in name]))

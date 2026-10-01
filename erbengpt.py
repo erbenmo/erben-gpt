@@ -33,21 +33,21 @@ def split_dataset(dataset):
     split = int(l * 0.9)
     return dataset[0:split], dataset[split:]
 
-def causal_attention(q, k, v):
-    # q, k, v: (B, N, H)
+def causal_attention_multi_head(q, k, v):
+    # q, k, v: (B, HC, N, HS)
     assert k.shape == v.shape and v.shape == q.shape
     head_size = k.shape[-1]
 
-    # each q should attend to every k, (B, N, H) @ (B, H, N) -> (B, N, N)
-    logits = q @ k.transpose(1, 2) / math.sqrt(head_size)
+    # each q should attend to every k, (B, HC, N, HS) @ (B, HC, HS, N) -> (B, HC, N, N)
+    logits = q @ k.transpose(-1, -2) / math.sqrt(head_size)
 
     # then mask attention for (q, later k) to be -inf to ignore them (self attention)
-    n = logits.shape[1]
+    n = logits.shape[-2]
     mask = torch.triu(torch.ones(n, n, dtype=torch.bool), diagonal=1)
     logits = logits.masked_fill(mask, float('-inf'))
 
     # finally calculate weight and multiple with v and sum
-    # (B, N, N) @ (B, N, H) -> (B, N, H)
+    # (B, HC, N, N) @ (B, HC, N, HS) -> (B, HC, N, HS)
     weight = torch.softmax(logits, dim=-1)
     attention = weight @ v
     return attention
@@ -91,21 +91,27 @@ class Transformer(nn.Module):
         normalized_features = self.ln(features)
 
         # multi-head attention
-        outputs = []
+        q = []
+        k = []
+        v = []
         for i in range(self.head_count):
-            # self-attention: generate q, k, v -> (B, N, H)
-            q = self.q[i](normalized_features)
-            k = self.k[i](normalized_features)
-            v = self.v[i](normalized_features)
+            # self-attention: generate q, k, v -> (B, N, HS)
+            q.append(self.q[i](normalized_features))
+            k.append(self.k[i](normalized_features))
+            v.append(self.v[i](normalized_features))
 
-            if self.attention_mode == "sdpa":
-                attention = F.scaled_dot_product_attention(q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1), is_causal = True).squeeze(1)
-            else:
-                attention = causal_attention(q, k, v)
-            outputs.append(attention)
+        q = torch.stack(q, dim=1) # (B, HC, N, HS)
+        k = torch.stack(k, dim=1)
+        v = torch.stack(v, dim=1)
 
-        # merge all (B, N, H) into (B, N, 16)
-        attentions = torch.cat(outputs, dim=-1)
+        if self.attention_mode == "sdpa":
+            attentions = F.scaled_dot_product_attention(q, k, v, is_causal = True)
+        else:
+            attentions = causal_attention_multi_head(q, k, v)
+        # attentions: (B, HC, N, HS)
+
+        # merge all heads (B, HC, N, HS) into (B, N, 16)
+        attentions = attentions.transpose(1, 2).flatten(-2)
         attentions = self.output_proj(attentions)
         # update original embeddings with attentions
         features = features + attentions
