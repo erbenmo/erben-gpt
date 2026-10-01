@@ -134,6 +134,7 @@ class LanguageModel(nn.Module):
         self.feature_count = feature_count
         self.head_count = head_count
         self.layer_count = layer_count
+        self.attention_mode = attention_mode
 
         if feature_count % head_count > 0:
             raise ValueError(f"feature count {feature_count} must be multiplier of head_count {head_count}")
@@ -203,7 +204,7 @@ class LanguageModel(nn.Module):
                 for name in names]
         target = [torch.tensor([self.ctoi(c) for c in list(name + self.SEP)])
                 for name in names]
-        # padding: SEP -> -100 (and target == -100 is ignored for training)
+        # padding: SEP pad with SEP and target pad with -100 which is ignored later
         input = pad_sequence(input, batch_first=True, padding_value=torch.tensor(self.ctoi(self.SEP)))
         target = pad_sequence(target, batch_first=True, padding_value=torch.tensor(-100))
 

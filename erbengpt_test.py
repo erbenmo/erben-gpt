@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import torch
 import pytest
 import copy
+import time
 
 @pytest.fixture
 def dataset():
@@ -250,3 +251,42 @@ def test_manual_vs_sdpa_attention():
         assert p1 is not None
         assert p2 is not None
         torch.testing.assert_close(p1, p2, msg = f"grad should be similar for {name}: grad1: {p1}, grad2: {p2}")
+
+def attention_benchmark_helper(N):
+    chars = [chr(c) for c in range(ord('a'), ord('z') + 1)]
+
+    # create 2 array with different attention (manual vs sdpa) but same weight
+    model1 = LanguageModel(chars, N, feature_count = 32, head_count = 4, layer_count = 2, attention_mode = "manual")
+    model2 = LanguageModel(chars, N, feature_count = 32, head_count = 4, layer_count = 2, attention_mode = "sdpa")
+    model2.load_state_dict(copy.deepcopy(model1.state_dict()))
+
+    # prepare dataset and warm up
+    B = 32
+    input = torch.randint(0, len(model1.chars), (B, N))
+    target = torch.randint(0, len(model1.chars), (B, N))
+    for model in [model1, model2]:
+        for _ in range(10):
+            model.zero_grad(set_to_none=True)
+            logits = model(input)
+            logits = logits.transpose(1, 2)
+            loss = F.cross_entropy(logits, target)
+            loss.backward()
+
+    # now start the full run
+    for model in [model1, model2, model1, model2]:
+        times = []
+        for _ in range(100):
+            model.zero_grad(set_to_none=True)
+            start = time.perf_counter()
+            logits = model(input)
+            logits = logits.transpose(1, 2)
+            loss = F.cross_entropy(logits, target)
+            loss.backward()
+            elapsed = time.perf_counter() - start
+            times.append(elapsed)
+        print(f"N = {N}, {model.attention_mode} avg latency: {sum(times) / len(times) * 1000} ms")
+
+
+def test_attention_benchmark():
+    attention_benchmark_helper(N = 16)
+    attention_benchmark_helper(N = 128)
