@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.optim.adam import Adam
 from torch.nn.utils.rnn import pad_sequence
 import torch
+from torch import Tensor
 import random
 import math
 from itertools import batched
@@ -32,6 +33,24 @@ def split_dataset(dataset):
     l = len(dataset)
     split = int(l * 0.9)
     return dataset[0:split], dataset[split:]
+
+class CharacterTokenizer:
+    SEP = "\n"
+
+    def __init__(self, chars):
+        self.chars = chars.copy()
+        self.chars.append(self.SEP)
+        self.ctoi = lambda c: self.chars.index(c)
+        self.itoc = lambda i: self.chars[i]
+        self.vocab_size = len(self.chars)
+        self.sep_id = self.ctoi(self.SEP)
+
+    def encode(self, name: str) -> Tensor:
+        return torch.tensor([self.ctoi(c) for c in list(name)], dtype = torch.long)
+
+    def decode(self, encoded: Tensor) -> str:
+        assert encoded.ndim == 1
+        return "".join([self.itoc(i) for i in encoded])
 
 def causal_attention_multi_head(q, k, v):
     # q, k, v: (B, HC, N, HS)
@@ -124,18 +143,12 @@ class Transformer(nn.Module):
 
 # train a language model. token id is converted into 16 features and we use a linear layer to predict next token
 class LanguageModel(nn.Module):
-    SEP = "\n"
-
     def __init__(self, chars, max_sequence, feature_count = 16, head_count = 4, layer_count = 2, attention_mode = "manual"):
         super().__init__()
 
-        self.chars = chars.copy()
-        self.chars.append(self.SEP)
+        self.tokenizer = CharacterTokenizer(chars)
+        vocab_size = self.tokenizer.vocab_size
 
-        self.ctoi = lambda c: self.chars.index(c)
-        self.itoc = lambda i: self.chars[i]
-
-        vocab_size = len(self.chars)
         self.max_sequence = max_sequence
         self.feature_count = feature_count
         self.head_count = head_count
@@ -183,7 +196,7 @@ class LanguageModel(nn.Module):
 
     def save(self, ckpt_path):
         ckpt = {'weight' : self.state_dict(),
-                'chars' : self.chars[:len(self.chars) - 1], # remove SEP
+                'chars' : self.tokenizer.chars[:len(self.tokenizer.chars) - 1], # remove SEP
                 'max_sequence' : self.max_sequence,
                 'feature_count' : self.feature_count,
                 'head_count' : self.head_count,
@@ -206,12 +219,10 @@ class LanguageModel(nn.Module):
     def _generate_loss(self, names):
         # input:   SEP, E, M, M, A
         # target:  E,   M, M, A, SEP
-        input = [torch.tensor([self.ctoi(c) for c in list(self.SEP + name)])
-                for name in names]
-        target = [torch.tensor([self.ctoi(c) for c in list(name + self.SEP)])
-                for name in names]
+        input = [self.tokenizer.encode(self.tokenizer.SEP + name) for name in names]
+        target = [self.tokenizer.encode(name + self.tokenizer.SEP) for name in names]
         # padding: SEP pad with SEP and target pad with -100 which is ignored later
-        input = pad_sequence(input, batch_first=True, padding_value=torch.tensor(self.ctoi(self.SEP)))
+        input = pad_sequence(input, batch_first=True, padding_value=torch.tensor(self.tokenizer.sep_id))
         target = pad_sequence(target, batch_first=True, padding_value=torch.tensor(-100))
 
         # forward pass - train on this input
@@ -289,14 +300,14 @@ class LanguageModel(nn.Module):
         samples = 10
         for _ in range(samples):
             name = ""
-            tokens = torch.tensor([self.ctoi(self.SEP)])
+            tokens = torch.tensor([self.tokenizer.sep_id])
             while True:
                 logits = self(tokens.unsqueeze(0)) # unsqueeze for batching
                 logits = logits[0][-1] # only care about the last sampled token
                 new_token = LanguageModel.select_next_token(logits, greedy, temperature)
                 tokens = torch.cat([tokens, torch.tensor([new_token])])
-                char = self.itoc(new_token.item())
-                if char == self.SEP:
+                char = self.tokenizer.decode(torch.tensor([new_token]))
+                if char == self.tokenizer.SEP:
                     break
                 name += char
                 if len(name) >= self.max_sequence - 1:
