@@ -143,10 +143,10 @@ class Transformer(nn.Module):
 
 # train a language model. token id is converted into 16 features and we use a linear layer to predict next token
 class LanguageModel(nn.Module):
-    def __init__(self, chars, max_sequence, feature_count = 16, head_count = 4, layer_count = 2, attention_mode = "manual"):
+    def __init__(self, tokenizer, max_sequence, feature_count = 16, head_count = 4, layer_count = 2, attention_mode = "manual"):
         super().__init__()
 
-        self.tokenizer = CharacterTokenizer(chars)
+        self.tokenizer = tokenizer
         vocab_size = self.tokenizer.vocab_size
 
         self.max_sequence = max_sequence
@@ -206,7 +206,8 @@ class LanguageModel(nn.Module):
     @staticmethod
     def load(ckpt_path, attention_mode):
         ckpt = torch.load(ckpt_path)
-        model = LanguageModel(ckpt['chars'],
+        tokenizer = CharacterTokenizer(ckpt['chars'])
+        model = LanguageModel(tokenizer,
                               ckpt['max_sequence'],
                               ckpt['feature_count'],
                               ckpt['head_count'],
@@ -338,12 +339,13 @@ if __name__ == '__main__':
     if not args.load:
         dataset = download_dataset()
         chars = sorted(list(set("".join(dataset))))
+        tokenizer = CharacterTokenizer(chars)
         max_sequence = max(len(name) for name in dataset) + 1
         train_data, val_data = split_dataset(dataset)
 
         for (feature, layer) in feature_layers:
             print(f"Feature: {feature}, Layer: {layer}")
-            model = LanguageModel(chars, max_sequence, feature_count = feature, head_count = 4, layer_count = layer, attention_mode = args.attention_mode)
+            model = LanguageModel(tokenizer, max_sequence, feature_count = feature, head_count = 4, layer_count = layer, attention_mode = args.attention_mode)
             optimizer = Adam(model.parameters(), lr=1e-3)
             model.train_mode(optimizer, train_data, val_data, steps)
 
