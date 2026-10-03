@@ -244,6 +244,7 @@ class LanguageModel(nn.Module):
         for i in range(val_batch):
             names.append(val_data[i % len(val_data)])
 
+        
         return self._generate_loss(names)
 
     @torch.no_grad()
