@@ -10,6 +10,9 @@ import random
 import math
 from itertools import batched
 import argparse
+import math
+import heapq
+from itertools import pairwise
 
 
 # download dataset
@@ -36,12 +39,18 @@ def split_dataset(dataset):
 
 
 class BPETokenizer:
-    def __init__(self, chars):
+    def __init__(self, chars, merge_table=None):
         self.chars = chars.copy()
 
         self.idx = len(self.chars)
-        self.merge_table = {} # (idx, idx) -> idx
-        self.reverse_table = {} # idx -> (idx, idx)
+
+        # lower idx pair may get merged into higher idx, but not vice versa
+        # Fresh dict per instance; copy caller's table so we don't mutate it.
+        self.merge_table = dict(merge_table) if merge_table is not None else {}
+        self.reverse_table = {}
+        for pair in self.merge_table:
+            value = self.merge_table[pair]
+            self.reverse_table[value] = pair
 
     def _merge(self, pair):
         new_idx = self.idx
@@ -58,10 +67,10 @@ class BPETokenizer:
     then generate pair (idx, idx) -> list of pairs
         find most common pair
         merge the pair -> update list of pairs
-
-    ... repeat until reaching vocab_size or list has only 1 pair
+        ... repeat until reaching vocab_size or list has only 1 pair
     """
     def train(self, documents, vocab_size):
+
         # encode char -> idx
         inputs = [] # list of list of index
         for document in documents:
@@ -83,7 +92,6 @@ class BPETokenizer:
                     counter[pair] += 1
                     if most_common == None or counter[most_common] < counter[pair]:
                         most_common = pair
-
             # no more pair left
             if most_common == None:
                 break
@@ -104,6 +112,130 @@ class BPETokenizer:
                     # remove the merged pair
                     pairs.pop(idx)
 
+
+    class Token:
+        def __init__(self, value, pos, prev, next, merge_rank = math.inf):
+            self.value = value # encoded value
+            self.pos = pos     # for breaking tie
+            self.merge_rank = merge_rank
+            self.prev = prev
+            self.next = next
+
+        def is_mergeable(self):
+            return self.merge_rank != math.inf
+
+        def __repr__(self):
+          return f"Token(pos: {self.pos}, value: {self.value})"
+
+    def refresh_merge_rank(self, token):
+        if token == None:
+            return
+        
+        # default to no rank
+        token.merge_rank = math.inf
+        if token.next == None:
+            return
+        
+        pair = (token.value, token.next.value)
+        if pair in self.merge_table:
+            token.merge_rank = self.merge_table[pair]
+
+    # merge a token with its right sibling
+    def merge(self, token: Token):
+        assert token.is_mergeable()
+        assert token.next != None
+        pair = (token.value, token.next.value)
+        assert pair in self.merge_table
+        new_value = self.merge_table[pair]
+
+        # neighbors of the merged tokens
+        left = token.prev
+        sibling = token.next
+        right = token.next.next
+
+        # update token's value and neighbor
+        token.value = new_value
+        token.next = right
+        if right != None:
+            right.prev = token
+
+        # left and token both have new sibling - so might become merge-able now
+        self.refresh_merge_rank(left)
+        self.refresh_merge_rank(token)
+        
+        # sibling is already merged so it can't be merged with its sibling now
+        sibling.merge_rank = math.inf
+
+        return (left, token)
+
+    # string -> value
+    def encode(self, document):
+        if len(document) == 0:
+            return torch.tensor([])
+        
+        # first create tokens, no rank, no neighbor
+        tokens = []
+        for pos in range(len(document)):
+            c = document[pos]
+            tokens.append(BPETokenizer.Token(self.chars.index(c), pos, prev = None, next = None))
+
+        # update neighbors
+        for l, r in pairwise(tokens):
+            l.next = r
+            r.prev = l
+
+        # refreshs and sort by merge priority
+        pq = [] # (rank, token)
+        for token in tokens:
+            self.refresh_merge_rank(token)
+            if token.is_mergeable():
+                heapq.heappush(pq, (token.merge_rank, token.pos, token))
+        head = tokens[0]
+        
+        # now keep merging everything thats mergeable, similar to a DFS
+        while pq:
+            (rank, _, token) = heapq.heappop(pq)
+
+            # the rank of the token has been updated / invalidated
+            # the old rank is stale, so remove it. a new item will appear anyway
+            if rank != token.merge_rank:
+                continue
+
+            # merge the token with its sibling
+            (left, current) = self.merge(token)
+            # left neighbor and current token has a new rank now - may trigger more merge
+            if left != None and left.is_mergeable():
+                heapq.heappush(pq, (left.merge_rank, left.pos, left))
+            if current.is_mergeable():
+                heapq.heappush(pq, (current.merge_rank, current.pos, current))
+            if current.prev == None:
+                head = current
+
+        # finally collect all Tokens from head
+        cur = head
+        ret = []
+        while cur != None:
+            ret.append(cur.value)
+            cur = cur.next
+
+        return torch.tensor(ret)
+
+    # idea is to keep expanding merged token until it is down to a single character
+    def decode_single(self, value) -> str:
+        # single char - termination
+        if value not in self.reverse_table:
+            return self.chars[value]
+
+        # merged
+        left, right = self.reverse_table[value]
+        return self.decode_single(left) + self.decode_single(right)
+
+    # tensor -> string
+    def decode(self, encoded):
+        s = ""
+        for value in encoded:
+            s += self.decode_single(value.item())
+        return s
 
 class CharacterTokenizer:
     SEP = "\n"
