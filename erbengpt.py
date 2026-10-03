@@ -52,6 +52,17 @@ class CharacterTokenizer:
         assert encoded.ndim == 1
         return "".join([self.itoc(i) for i in encoded])
 
+def prepare_batch(names, tokenizer):
+    # input:   SEP, E, M, M, A
+    # target:  E,   M, M, A, SEP
+    input = [tokenizer.encode(tokenizer.SEP + name) for name in names]
+    target = [tokenizer.encode(name + tokenizer.SEP) for name in names]
+    # padding: SEP pad with SEP and target pad with -100 which is ignored later
+    input = pad_sequence(input, batch_first=True, padding_value=torch.tensor(tokenizer.sep_id))
+    target = pad_sequence(target, batch_first=True, padding_value=torch.tensor(-100))
+
+    return (input, target)
+
 def causal_attention_multi_head(q, k, v):
     # q, k, v: (B, HC, N, HS)
     assert k.shape == v.shape and v.shape == q.shape
@@ -216,15 +227,8 @@ class LanguageModel(nn.Module):
         model.load_state_dict(ckpt['weight'])
         return model
 
-
     def _generate_loss(self, names):
-        # input:   SEP, E, M, M, A
-        # target:  E,   M, M, A, SEP
-        input = [self.tokenizer.encode(self.tokenizer.SEP + name) for name in names]
-        target = [self.tokenizer.encode(name + self.tokenizer.SEP) for name in names]
-        # padding: SEP pad with SEP and target pad with -100 which is ignored later
-        input = pad_sequence(input, batch_first=True, padding_value=torch.tensor(self.tokenizer.sep_id))
-        target = pad_sequence(target, batch_first=True, padding_value=torch.tensor(-100))
+        (input, target) = prepare_batch(names, self.tokenizer)
 
         # forward pass - train on this input
         logits = self(input) # shape: [batch, max(len(name))+1, vocab_size]

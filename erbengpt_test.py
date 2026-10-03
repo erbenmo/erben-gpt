@@ -1,4 +1,4 @@
-from erbengpt import download_dataset, split_dataset, causal_attention_multi_head
+from erbengpt import download_dataset, split_dataset, causal_attention_multi_head, prepare_batch
 from erbengpt import LanguageModel, CharacterTokenizer
 from torch.optim.adam import Adam
 import torch.nn.functional as F
@@ -292,3 +292,12 @@ def test_tokenizer(tokenizer):
     assert encoded.dtype == torch.long
     decoded = tokenizer.decode(encoded)
     assert input == decoded
+
+def test_prepare_batch(tokenizer):
+    names = ["emma", "al"]
+    (input, target) = prepare_batch(names, tokenizer)
+    
+    expected_input = torch.tensor([[26, 4, 12, 12, 0], [26, 0, 11, 26, 26]])
+    expected_target = torch.tensor([[4, 12, 12, 0, 26], [0, 11, 26, -100, -100]])
+    torch.testing.assert_close(input, expected_input)
+    torch.testing.assert_close(target, expected_target)    
