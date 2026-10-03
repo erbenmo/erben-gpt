@@ -1,5 +1,5 @@
 from erbengpt import download_dataset, split_dataset, causal_attention_multi_head, prepare_batch
-from erbengpt import LanguageModel, CharacterTokenizer
+from erbengpt import LanguageModel, CharacterTokenizer, BPETokenizer
 from torch.optim.adam import Adam
 import torch.nn.functional as F
 import torch
@@ -20,6 +20,12 @@ def dataset():
 def tokenizer():
     chars = [chr(c) for c in range(ord('a'), ord('z') + 1)]
     tokenizer = CharacterTokenizer(chars)
+    yield tokenizer
+
+@pytest.fixture
+def bpe():
+    chars = [chr(c) for c in range(ord('a'), ord('z') + 1)]
+    tokenizer = BPETokenizer(chars)
     yield tokenizer
 
 def test_small_model(dataset):
@@ -301,3 +307,54 @@ def test_prepare_batch(tokenizer):
     expected_target = torch.tensor([[4, 12, 12, 0, 26], [0, 11, 26, -100, -100]])
     torch.testing.assert_close(input, expected_input)
     torch.testing.assert_close(target, expected_target)    
+
+
+def test_bpe(bpe):
+    doc = ["ama", "amy", "samy"]
+    # input: (0, 12, 0), (0, 12, 24), (18, 0, 12, 24)
+    # mapping:
+    # (0, 12) -> 26
+    #   input: (26, 0), (26, 24), (18, 26, 24)
+    # (26, 24) -> 27
+    #   input: (26, 0), (27), (18, 27)
+    # (26, 0) -> 28
+    # (18, 27) -> 29
+    bpe.train(doc, 26)
+    assert len(bpe.merge_table) == 0
+
+    bpe = BPETokenizer(bpe.chars)
+    bpe.train(doc, 27)
+    assert bpe.merge_table == {(0, 12) : 26}
+
+    bpe = BPETokenizer(bpe.chars)
+    bpe.train(doc, 42)
+    expected = {(0, 12) : 26,
+                (26, 24) : 27,
+                (26, 0) : 28,
+                (18, 27) : 29}
+    assert(bpe.merge_table == expected)
+
+    doc = ["aaa", "aaaa"]
+    # -> (26, 0), (26, 26)
+    bpe = BPETokenizer(bpe.chars)
+    bpe.train(doc, 42)
+    assert(bpe.merge_table == {(0, 0) : 26,
+                               (26, 0) : 27,
+                               (26, 26) : 28})
+
+    doc = [""]
+    bpe = BPETokenizer(bpe.chars)
+    bpe.train(doc, 42)
+    assert(len(bpe.merge_table) == 0)
+
+    doc = ["s"]
+    bpe = BPETokenizer(bpe.chars)
+    bpe.train(doc, 42)
+    assert(len(bpe.merge_table) == 0)
+
+    doc = ["a", "b"]
+    bpe = BPETokenizer(bpe.chars)
+    bpe.train(doc, 42)
+    assert(len(bpe.merge_table) == 0)
+
+

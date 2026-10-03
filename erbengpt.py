@@ -34,6 +34,77 @@ def split_dataset(dataset):
     split = int(l * 0.9)
     return dataset[0:split], dataset[split:]
 
+
+class BPETokenizer:
+    def __init__(self, chars):
+        self.chars = chars.copy()
+
+        self.idx = len(self.chars)
+        self.merge_table = {} # (idx, idx) -> idx
+        self.reverse_table = {} # idx -> (idx, idx)
+
+    def _merge(self, pair):
+        new_idx = self.idx
+        self.idx += 1
+
+        assert pair not in self.merge_table
+        self.merge_table[pair] = new_idx
+        self.reverse_table[new_idx] = pair
+        return new_idx
+
+    """
+    first encode every char -> idx using self.chars
+    
+    then generate pair (idx, idx) -> list of pairs
+        find most common pair
+        merge the pair -> update list of pairs
+
+    ... repeat until reaching vocab_size or list has only 1 pair
+    """
+    def train(self, documents, vocab_size):
+        # encode char -> idx
+        inputs = [] # list of list of index
+        for document in documents:
+            inputs.append([self.chars.index(c) for c in document])
+
+        # generate pairs
+        pair_list = []
+        for indexes in inputs:
+            pair_list.append([(prev, next) for prev, next in zip(indexes, indexes[1:])])
+
+        while len(self.merge_table) + len(self.chars) < vocab_size:
+            # count every pair, find the most common pair
+            counter = {} # (prev, next) -> counter
+            most_common = None
+            for pairs in pair_list:
+                for pair in pairs:
+                    if pair not in counter:
+                        counter[pair] = 0
+                    counter[pair] += 1
+                    if most_common == None or counter[most_common] < counter[pair]:
+                        most_common = pair
+
+            # no more pair left
+            if most_common == None:
+                break
+
+            # register this pair
+            merge_idx = self._merge(most_common)
+
+            # merge pair in pair list
+            for pairs in pair_list:
+                while most_common in pairs:
+                    idx = pairs.index(most_common)
+                    # merge left and right pairs
+                    if idx > 0:
+                        pairs[idx-1] = (pairs[idx-1][0], merge_idx)
+                    if idx + 1 < len(pairs):
+                        pairs[idx+1] = (merge_idx, pairs[idx+1][1])
+
+                    # remove the merged pair
+                    pairs.pop(idx)
+
+
 class CharacterTokenizer:
     SEP = "\n"
 
@@ -244,7 +315,6 @@ class LanguageModel(nn.Module):
         for i in range(val_batch):
             names.append(val_data[i % len(val_data)])
 
-        
         return self._generate_loss(names)
 
     @torch.no_grad()
