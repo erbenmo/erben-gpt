@@ -411,6 +411,15 @@ def test_bpe_encode():
             (2, 0): 43
     }, "ccca", torch.tensor([42, 43]))
 
+    # After b+c merges, the old a+b candidate must not merge a+bc
+    # ahead of the higher-priority bc+d rule. Expected: a | bcd.
+    bpe_encode_helper({
+            (1, 2): 42,  # b + c -> bc
+            (0, 1): 43,  # a + b -> ab (stale after the first merge)
+            (42, 3): 44, # bc + d -> bcd
+            (0, 42): 45, # a + bc -> abc
+    }, "abcd", torch.tensor([0, 44], dtype=torch.long))
+
 def test_bpe_heap_tie_order():
     tokenizer = BPETokenizer(["a", "b", "c"], {
         (0, 2): 3,  # a + c -> ac
@@ -425,5 +434,3 @@ def test_bpe_heap_tie_order():
     print(encoded)
     torch.testing.assert_close(encoded, expected)
     assert tokenizer.decode(encoded) == "ccacccca"
-
-    

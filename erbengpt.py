@@ -90,7 +90,7 @@ class BPETokenizer:
             # no adjacent pairs remain
             if common == None:
                 break
-            
+
             # found the common pair, register it
             merge_idx = self._merge(common)
             
@@ -111,59 +111,50 @@ class BPETokenizer:
             encoded_list = merged_list
 
     class Token:
-        def __init__(self, value, pos, prev, next, merge_rank = math.inf):
-            self.value = value # encoded value
-            self.pos = pos     # for breaking tie
-            self.merge_rank = merge_rank
+        def __init__(self, value, pos, prev, next, merged = False):
+            self.value = value  # encoded value
+            self.pos = pos      # for breaking tie
             self.prev = prev
             self.next = next
-
-        def is_mergeable(self):
-            return self.merge_rank != math.inf
+            self.merged = merged 
 
         def __repr__(self):
           return f"Token(pos: {self.pos}, value: {self.value})"
 
-    def refresh_merge_rank(self, token):
-        if token == None:
-            return
-        
-        # default to no rank
-        token.merge_rank = math.inf
-        if token.next == None:
-            return
-        
-        pair = (token.value, token.next.value)
-        if pair in self.merge_table:
-            token.merge_rank = self.merge_table[pair]
-
-    # merge a token with its right sibling
+    # merge a token with its right sibling -> return merged token
     def merge(self, token: Token):
-        assert token.is_mergeable()
-        assert token.next != None
-        pair = (token.value, token.next.value)
-        assert pair in self.merge_table
-        new_value = self.merge_table[pair]
+        new_value = self.is_mergeable(token)
+        assert new_value != None
 
         # neighbors of the merged tokens
         left = token.prev
         sibling = token.next
         right = token.next.next
 
-        # update token's value and neighbor
-        token.value = new_value
-        token.next = right
+        # create a new merged token and update its neighbors
+        merged = BPETokenizer.Token(new_value, token.pos, left, right)
+        if left != None:
+            left.next = merged
         if right != None:
-            right.prev = token
+            right.prev = merged
 
-        # left and token both have new sibling - so might become merge-able now
-        self.refresh_merge_rank(left)
-        self.refresh_merge_rank(token)
-        
-        # sibling is already merged so it can't be merged with its sibling now
-        sibling.merge_rank = math.inf
+        # mark the 2 merged tokens as merged
+        token.merged = True
+        sibling.merged = True
 
-        return (left, token)
+        return merged
+
+    # return rank if mergeable, else None
+    def is_mergeable(self, token: Token):
+        if token == None or token.next == None:
+            return None
+        if token.merged or token.next.merged:
+            return None
+
+        pair = (token.value, token.next.value)
+        if pair not in self.merge_table:
+            return None
+        return self.merge_table[pair]
 
     # string -> value
     def encode(self, document):
@@ -184,29 +175,37 @@ class BPETokenizer:
         # refreshs and sort by merge priority
         pq = [] # (rank, token)
         for token in tokens:
-            self.refresh_merge_rank(token)
-            if token.is_mergeable():
-                heapq.heappush(pq, (token.merge_rank, token.pos, token))
+            rank = self.is_mergeable(token)
+            if rank != None:
+                heapq.heappush(pq, (rank, token.pos, token, token.next))
         head = tokens[0]
         
         # now keep merging everything thats mergeable, similar to a DFS
         while pq:
-            (rank, _, token) = heapq.heappop(pq)
+            (rank, _, token, expected_next) = heapq.heappop(pq)
 
-            # the rank of the token has been updated / invalidated
-            # the old rank is stale, so remove it. a new item will appear anyway
-            if rank != token.merge_rank:
+            # either token got merged, or token.next got merged
+            if self.is_mergeable(token) == None:
+                continue
+            # token.next got overriden - this original candidate is not valid
+            if expected_next is not token.next:
                 continue
 
             # merge the token with its sibling
-            (left, current) = self.merge(token)
-            # left neighbor and current token has a new rank now - may trigger more merge
-            if left != None and left.is_mergeable():
-                heapq.heappush(pq, (left.merge_rank, left.pos, left))
-            if current.is_mergeable():
-                heapq.heappush(pq, (current.merge_rank, current.pos, current))
-            if current.prev == None:
-                head = current
+            merged = self.merge(token)
+
+            # the current merge may trigger left neighbor and merged token to become mergeable
+            left = merged.prev
+            rank = self.is_mergeable(left)
+            if rank != None:
+                heapq.heappush(pq, (rank, left.pos, left, left.next))
+            rank = self.is_mergeable(merged)
+            if rank != None:
+                heapq.heappush(pq, (rank, merged.pos, merged, merged.next))
+
+            # merged token may be the head
+            if merged.prev == None:
+                head = merged
 
         # finally collect all Tokens from head
         cur = head
