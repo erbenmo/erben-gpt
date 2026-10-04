@@ -61,57 +61,54 @@ class BPETokenizer:
         self.reverse_table[new_idx] = pair
         return new_idx
 
+
     """
-    first encode every char -> idx using self.chars
-    
-    then generate pair (idx, idx) -> list of pairs
-        find most common pair
-        merge the pair -> update list of pairs
-        ... repeat until reaching vocab_size or list has only 1 pair
+    1. encode into [1, 7, 3, 1, 7, 3, 1, 7]
+    2. try to find common pattern like [1, 7]
+    3. replace into [42, 3, 42, 3, 42]
+    4. repeat until nothing left to merge or we reach vocab_size
     """
     def train(self, documents, vocab_size):
-
         # encode char -> idx
-        inputs = [] # list of list of index
+        encoded_list = [] # list of list of index
         for document in documents:
-            inputs.append([self.chars.index(c) for c in document])
-
-        # generate pairs
-        pair_list = []
-        for indexes in inputs:
-            pair_list.append([(prev, next) for prev, next in zip(indexes, indexes[1:])])
+            encoded_list.append([self.chars.index(c) for c in document])
 
         while len(self.merge_table) + len(self.chars) < vocab_size:
-            # count every pair, find the most common pair
-            counter = {} # (prev, next) -> counter
-            most_common = None
-            for pairs in pair_list:
-                for pair in pairs:
+            # loop the string to find most common pair
+            counter = {}
+            common = None
+
+            for encoded in encoded_list:
+                for pair in pairwise(encoded):
                     if pair not in counter:
                         counter[pair] = 0
                     counter[pair] += 1
-                    if most_common == None or counter[most_common] < counter[pair]:
-                        most_common = pair
-            # no more pair left
-            if most_common == None:
+                    if common == None or counter[common] < counter[pair]:
+                        common = pair
+
+            # no adjacent pairs remain
+            if common == None:
                 break
-
-            # register this pair
-            merge_idx = self._merge(most_common)
-
-            # merge pair in pair list
-            for pairs in pair_list:
-                while most_common in pairs:
-                    idx = pairs.index(most_common)
-                    # merge left and right pairs
-                    if idx > 0:
-                        pairs[idx-1] = (pairs[idx-1][0], merge_idx)
-                    if idx + 1 < len(pairs):
-                        pairs[idx+1] = (merge_idx, pairs[idx+1][1])
-
-                    # remove the merged pair
-                    pairs.pop(idx)
-
+            
+            # found the common pair, register it
+            merge_idx = self._merge(common)
+            
+            # then replace original encoded string
+            merged_list = []
+            for encoded in encoded_list:
+                merged = []
+                i = 0
+                while i < len(encoded):
+                    # found a merge
+                    if i+1 < len(encoded) and encoded[i] == common[0] and encoded[i+1] == common[1]:
+                        merged.append(merge_idx)
+                        i += 2
+                    else:
+                        merged.append(encoded[i])
+                        i += 1
+                merged_list.append(merged)
+            encoded_list = merged_list
 
     class Token:
         def __init__(self, value, pos, prev, next, merge_rank = math.inf):
