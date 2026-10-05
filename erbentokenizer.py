@@ -5,12 +5,15 @@ from itertools import pairwise
 from datasets import load_dataset, Dataset
 from pathlib import Path
 import pickle
+import random
 
 class BPETokenizer:
     def __init__(self, chars, merge_table=None):
         self.chars = chars.copy()
-
         self.idx = len(self.chars)
+        self.ctoi = {}
+        for i in range(self.idx):
+            self.ctoi[self.chars[i]] = i
 
         # lower idx pair may get merged into higher idx, but not vice versa
         # Fresh dict per instance; copy caller's table so we don't mutate it.
@@ -40,8 +43,9 @@ class BPETokenizer:
         # encode char -> idx
         encoded_list = [] # list of list of index
         for document in documents:
-            encoded_list.append([self.chars.index(c) for c in document])
+            encoded_list.append([self.ctoi[c] for c in document])
 
+        steps = 0
         while len(self.merge_table) + len(self.chars) < vocab_size:
             # loop the string to find most common pair
             counter = {}
@@ -59,6 +63,10 @@ class BPETokenizer:
             if common == None:
                 break
 
+            if steps % 10 == 0:
+                print(f"train: {steps}")
+            steps += 1
+            
             # found the common pair, register it
             merge_idx = self._register_pair(common)
             
@@ -138,7 +146,7 @@ class BPETokenizer:
         tokens = []
         for pos in range(len(document)):
             c = document[pos]
-            tokens.append(BPETokenizer.Token(self.chars.index(c), pos, prev = None, next = None))
+            tokens.append(BPETokenizer.Token(self.ctoi[c], pos, prev = None, next = None))
         for l, r in pairwise(tokens):
             l.next = r
             r.prev = l
@@ -225,9 +233,7 @@ class CharacterTokenizer:
         assert encoded.ndim == 1
         return "".join([self.itoc(i) for i in encoded])
 
-if __name__ == '__main__':
-    # train the BPE Tokenizer using 1000 documents
-    
+def download_documents():
     # download 1000 documents dataset from fineweb-edu
     file = "fineweb-1000"
     if not Path(file).exists():
@@ -236,16 +242,23 @@ if __name__ == '__main__':
         subset.save_to_disk("fineweb-1000")
     else:
         print("fineweb-1000 already exists")
+    dataset = Dataset.load_from_disk("fineweb-1000")
+    return [doc['text'] for doc in dataset]
+
+def split_documents(documents):
+
+    l = len(documents)
+    split = int(l * 0.9)
+    return documents[0:split], documents[split:]
+
+if __name__ == '__main__':
+    documents = download_documents()
+    random.seed(42)
+    random.shuffle(documents)
+    train, val = split_documents(documents)
 
     # train BPE
-    dataset = Dataset.load_from_disk("fineweb-1000")
     vocab_size = 8192
-    documents = [doc['text'] for doc in dataset]
-    chars = list(set("".join(documents)))
+    chars = sorted(list(set("".join(train))))
     tokenizer = BPETokenizer(chars)
-    tokenizer.train(documents, vocab_size)
-
-
-
-
-    
+    tokenizer.train(train, vocab_size)

@@ -37,7 +37,6 @@ def split_dataset(dataset):
     return dataset[0:split], dataset[split:]
 
 
-
 def prepare_batch(names, tokenizer):
     # input:   SEP, E, M, M, A
     # target:  E,   M, M, A, SEP
