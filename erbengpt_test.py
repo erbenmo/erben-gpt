@@ -1,5 +1,6 @@
 from erbengpt import download_dataset, split_dataset, causal_attention_multi_head, prepare_batch
-from erbengpt import LanguageModel, CharacterTokenizer, BPETokenizer
+from erbengpt import LanguageModel
+from erbentokenizer import BPETokenizer, CharacterTokenizer
 from torch.optim.adam import Adam
 import torch.nn.functional as F
 import torch
@@ -431,6 +432,5 @@ def test_bpe_heap_tie_order():
     # The final segmentation must be cc | ac | cc | ca.
     encoded = tokenizer.encode("ccacccca")
     expected = torch.tensor([5, 3, 5, 8], dtype=torch.long)
-    print(encoded)
     torch.testing.assert_close(encoded, expected)
     assert tokenizer.decode(encoded) == "ccacccca"
