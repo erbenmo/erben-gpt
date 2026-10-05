@@ -434,3 +434,15 @@ def test_bpe_heap_tie_order():
     expected = torch.tensor([5, 3, 5, 8], dtype=torch.long)
     torch.testing.assert_close(encoded, expected)
     assert tokenizer.decode(encoded) == "ccacccca"
+
+def test_bpe_save_load(bpe, tmp_path):
+    doc = ["ama", "amy", "samy"]
+    bpe.train(doc, 42)
+
+    file = tmp_path / "tokenizer.file"
+    bpe.save(file)
+    new_bpe = BPETokenizer.load(file)
+
+    assert bpe.merge_table == new_bpe.merge_table
+    assert bpe.chars == new_bpe.chars
+

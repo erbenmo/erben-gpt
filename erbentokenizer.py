@@ -2,6 +2,9 @@ import torch
 from torch import Tensor
 import heapq
 from itertools import pairwise
+from datasets import load_dataset, Dataset
+from pathlib import Path
+import pickle
 
 class BPETokenizer:
     def __init__(self, chars, merge_table=None):
@@ -192,6 +195,18 @@ class BPETokenizer:
             s += self.decode_single(value.item())
         return s
 
+    def save(self, tokenizer_path):
+        with open(tokenizer_path, 'wb') as f:
+            content = {"chars" : self.chars,
+                       "merge_table" : self.merge_table}
+            pickle.dump(content, f)
+
+    @staticmethod
+    def load(tokenizer_path):
+        with open(tokenizer_path, 'rb') as f:
+            content = pickle.load(f)
+            return BPETokenizer(content["chars"], content["merge_table"])
+
 class CharacterTokenizer:
     SEP = "\n"
 
@@ -209,3 +224,28 @@ class CharacterTokenizer:
     def decode(self, encoded: Tensor) -> str:
         assert encoded.ndim == 1
         return "".join([self.itoc(i) for i in encoded])
+
+if __name__ == '__main__':
+    # train the BPE Tokenizer using 1000 documents
+    
+    # download 1000 documents dataset from fineweb-edu
+    file = "fineweb-1000"
+    if not Path(file).exists():
+        dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
+        subset = Dataset.from_list(list(dataset.take(1000)))
+        subset.save_to_disk("fineweb-1000")
+    else:
+        print("fineweb-1000 already exists")
+
+    # train BPE
+    dataset = Dataset.load_from_disk("fineweb-1000")
+    vocab_size = 8192
+    documents = [doc['text'] for doc in dataset]
+    chars = list(set("".join(documents)))
+    tokenizer = BPETokenizer(chars)
+    tokenizer.train(documents, vocab_size)
+
+
+
+
+    
