@@ -6,6 +6,11 @@ from datasets import load_dataset, Dataset
 from pathlib import Path
 import pickle
 import random
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.trainers import BpeTrainer
+from tokenizers.pre_tokenizers import ByteLevel
+import tokenizers.decoders
 
 class BPETokenizer:
     def __init__(self, chars, merge_table=None):
@@ -252,13 +257,33 @@ def split_documents(documents):
     return documents[0:split], documents[split:]
 
 if __name__ == '__main__':
-    documents = download_documents()
     random.seed(42)
-    random.shuffle(documents)
-    train, val = split_documents(documents)
 
-    # train BPE
-    vocab_size = 8192
-    chars = sorted(list(set("".join(train))))
-    tokenizer = BPETokenizer(chars)
-    tokenizer.train(train, vocab_size)
+    file = "tokenizer.json"
+    if not Path(file).exists():
+        # load dataset
+        documents = download_documents()
+        random.shuffle(documents)
+        train, val = split_documents(documents)
+
+        # train Tokenizers
+        tokenizer = Tokenizer(BPE())
+        tokenizer.pre_tokenizer = ByteLevel(add_prefix_space = False)
+        tokenizer.decoder = tokenizers.decoders.ByteLevel()
+        vocab_size = 8192
+        trainer = BpeTrainer(vocab_size = vocab_size, initial_alphabet = ByteLevel.alphabet(), special_tokens=["[SEP]"])
+        tokenizer.train_from_iterator(train, trainer)
+        tokenizer.save(file)
+    else:
+        print("tokenizer.json already exists")
+
+    tokenizer = Tokenizer.from_file(file)
+
+    input = "Hello World"
+    encoded = tokenizer.encode(input)
+    print(encoded.tokens)
+    print(encoded.ids)
+
+    decoded = tokenizer.decode(encoded.ids)
+    assert decoded == input
+
