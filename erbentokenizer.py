@@ -1,10 +1,11 @@
-import torch
-from torch import Tensor
 import heapq
-from itertools import pairwise
-from datasets import load_dataset, Dataset
-from pathlib import Path
 import pickle
+from itertools import pairwise
+from pathlib import Path
+
+import torch
+from datasets import Dataset, load_dataset
+from torch import Tensor
 import random
 from tokenizers import Tokenizer
 from tokenizers.models import BPE

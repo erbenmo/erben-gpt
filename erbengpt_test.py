@@ -1,12 +1,14 @@
-from erbengpt import download_dataset, split_dataset, causal_attention_multi_head, prepare_batch
-from erbengpt import LanguageModel
-from erbentokenizer import BPETokenizer, CharacterTokenizer
-from torch.optim.adam import Adam
-import torch.nn.functional as F
-import torch
-import pytest
 import copy
 import time
+
+import pytest
+import torch
+import torch.nn.functional as F
+from torch.optim.adam import Adam
+
+from erbengpt import LanguageModel, causal_attention_multi_head
+from erbengptname import download_dataset, split_dataset, train_naming, validate_all, prepare_batch
+from erbentokenizer import BPETokenizer, CharacterTokenizer
 
 @pytest.fixture
 def dataset():
@@ -42,12 +44,12 @@ def test_small_model(dataset):
     tokenizer = CharacterTokenizer(chars)
     model = LanguageModel(tokenizer, max_sequence)
     optimizer = Adam(model.parameters(), lr=1e-3)
-    model.train_mode(optimizer, train_data, val_data, steps)
+    train_naming(model, optimizer, tokenizer, train_data, val_data, steps)
 
-    loss = model.validate_all(val_data, 256)
+    loss = validate_all(model, tokenizer, val_data, 256)
     print(f"Final loss: {loss}")
 
-    loss = model.validate_all(train_data, 8)
+    loss = validate_all(model, tokenizer, train_data, 8)
     assert 0.291 <= loss and loss <= 0.292
 
 def test_causal_mask(tokenizer):
@@ -98,7 +100,8 @@ def test_gradient(tokenizer):
 
     # train a small model with 1 step
     model = LanguageModel(tokenizer, max_sequence, 4, 1, 1)
-    loss = model._generate_loss(names)
+    (input, target) = prepare_batch(names, tokenizer)
+    loss = model._generate_loss(input, target)
     loss.backward()
 
     # verify the gradient is not None and is finite
@@ -239,8 +242,9 @@ def test_manual_vs_sdpa_attention(tokenizer):
     model2.load_state_dict(copy.deepcopy(model1.state_dict()))
 
     # generate loss on both models - should look similar
-    loss1 = model1._generate_loss(names)
-    loss2 = model2._generate_loss(names)
+    (input, target) = prepare_batch(names, tokenizer)
+    loss1 = model1._generate_loss(input, target)
+    loss2 = model2._generate_loss(input, target)
     torch.testing.assert_close(loss1, loss2, msg = f"loss should be similar: loss1: {loss1}, loss2: {loss2}")
 
     # calculate gradient for loss - should be similar
