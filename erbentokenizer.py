@@ -11,6 +11,9 @@ from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import ByteLevel
 import tokenizers.decoders
+import numpy as np
+
+SEP = "[SEP]"
 
 class BPETokenizer:
     def __init__(self, chars, merge_table=None):
@@ -256,34 +259,65 @@ def split_documents(documents):
     split = int(l * 0.9)
     return documents[0:split], documents[split:]
 
+def train_bpe_tokenizer(train):
+    # train Tokenizers
+    tokenizer = Tokenizer(BPE())
+    tokenizer.pre_tokenizer = ByteLevel(add_prefix_space = False)
+    tokenizer.decoder = tokenizers.decoders.ByteLevel()
+    vocab_size = 8192
+    trainer = BpeTrainer(vocab_size = vocab_size, initial_alphabet = ByteLevel.alphabet(), special_tokens=[SEP])
+    tokenizer.train_from_iterator(train, trainer)
+    return tokenizer
+
+def tokenize_and_save_documents(file, tokenizer, documents):
+    sep_ids = tokenizer.encode(SEP).ids
+    ids = [token for doc in documents for token in tokenizer.encode(doc).ids + sep_ids]
+    ids = np.array(ids, dtype = np.uint16)
+    np.save(file, ids)
+    return ids
+
+def get_tokenized_documents(file, tokenizer, documents):
+    if Path(file).exists():
+        print(f"{file} exists")
+        return np.load(file)
+    else:
+        return tokenize_and_save_documents(file, tokenizer, documents)
+
+def build_input_and_expected(ids, B, N):
+    inputs = []
+    expected = []
+    for _ in range(B):
+        pos = random.randrange(len(ids) - N)
+        inputs.append(torch.tensor(ids[pos:pos+N], dtype = torch.long))
+        expected.append(torch.tensor(ids[pos+1:pos+1+N], dtype = torch.long))
+    return torch.stack(inputs), torch.stack(expected)
+
 if __name__ == '__main__':
     random.seed(42)
 
+    # load dataset
+    documents = download_documents()
+    random.shuffle(documents)
+    train, val = split_documents(documents)
+
+    # train the tokenizer
     file = "tokenizer.json"
     if not Path(file).exists():
-        # load dataset
-        documents = download_documents()
-        random.shuffle(documents)
-        train, val = split_documents(documents)
-
-        # train Tokenizers
-        tokenizer = Tokenizer(BPE())
-        tokenizer.pre_tokenizer = ByteLevel(add_prefix_space = False)
-        tokenizer.decoder = tokenizers.decoders.ByteLevel()
-        vocab_size = 8192
-        trainer = BpeTrainer(vocab_size = vocab_size, initial_alphabet = ByteLevel.alphabet(), special_tokens=["[SEP]"])
-        tokenizer.train_from_iterator(train, trainer)
+        tokenizer = train_bpe_tokenizer(train)
         tokenizer.save(file)
     else:
         print("tokenizer.json already exists")
-
     tokenizer = Tokenizer.from_file(file)
 
-    input = "Hello World"
-    encoded = tokenizer.encode(input)
-    print(encoded.tokens)
-    print(encoded.ids)
+    # now encode the train and val dataset
+    train_file = "train.tokenized.npy"
+    val_file = "val.tokenized.npy"
+    train_ids = get_tokenized_documents(train_file, tokenizer, train)
+    val_ids = get_tokenized_documents(val_file, tokenizer, val)
 
-    decoded = tokenizer.decode(encoded.ids)
-    assert decoded == input
-
+    # build dataset
+    B = 5
+    N = 5
+    inputs, expected = build_input_and_expected(train_ids, B, N)
+    print(inputs)
+    print(expected)
