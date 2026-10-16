@@ -89,6 +89,40 @@ def train_naming(model: LanguageModel, optimizer, tokenizer, train_data, val_dat
             val_loss = validate(model, val_input, val_target)
             print(f"step: {step}, training loss: {loss.item():.4f}, val loss: {val_loss.item():.4f}")
 
+@torch.no_grad()
+def generate(model: LanguageModel, tokenizer: CharacterTokenizer, greedy = False, temperature = 1):
+    samples = []
+    print("\nGeneration samples:")
+    # generate a few samples
+    for _ in range(10):
+        sample = ""
+        tokens = torch.tensor([tokenizer.sep_id])
+        while True:
+            logits = model(tokens.unsqueeze(0)) # unsqueeze for batching
+            logits = logits[0][-1] # only care about the last sampled token
+            new_token = LanguageModel.select_next_token(logits, greedy, temperature)
+            tokens = torch.cat([tokens, torch.tensor([new_token])])
+            char = tokenizer.decode(torch.tensor([new_token]))
+            if char == tokenizer.SEP:
+                break
+            sample += char
+            if len(sample) >= model.max_sequence - 1:
+                break
+        samples.append(sample)
+        print(sample)
+    return samples
+
+def save(model: LanguageModel, tokenizer, ckpt_path):
+    ckpt = model.save()
+    ckpt['chars'] = tokenizer.chars[:len(tokenizer.chars) - 1] # remove SEP    
+    torch.save(ckpt, ckpt_path)
+
+def load(ckpt_path, attention_mode):
+    ckpt = torch.load(ckpt_path)
+    tokenizer = CharacterTokenizer(ckpt['chars'])
+    model = LanguageModel.load(ckpt, attention_mode)
+    return (model, tokenizer)
+
 if __name__ == '__main__':
     steps = 10000
 
@@ -116,7 +150,7 @@ if __name__ == '__main__':
 
         for (feature, layer) in feature_layers:
             print(f"Feature: {feature}, Layer: {layer}")
-            model = LanguageModel(tokenizer, max_sequence, feature_count = feature, head_count = 4, layer_count = layer, attention_mode = args.attention_mode)
+            model = LanguageModel(tokenizer.vocab_size, max_sequence, feature_count = feature, head_count = 4, layer_count = layer, attention_mode = args.attention_mode)
             optimizer = Adam(model.parameters(), lr=1e-3)
 
             train_naming(model, optimizer, tokenizer, train_data, val_data, steps)
@@ -127,11 +161,11 @@ if __name__ == '__main__':
             loss = validate_all(model, tokenizer, val_data, 256)
             print(f"Final loss: {loss}")
 
-            model.save(f"{args.ckpt}.f_{feature}.l_{layer}")
+            save(model, tokenizer, f"{args.ckpt}.f_{feature}.l_{layer}")
             print("----------------------------------------")
 
-            model.generate(args.greedy, args.temperature)
+            generate(model, tokenizer, args.greedy, args.temperature)
     else:
         for (feature, layer) in feature_layers:
-            model = LanguageModel.load(f"{args.ckpt}.f_{feature}.l_{layer}", args.attention_mode)
-            model.generate(args.greedy, args.temperature)
+            model, tokenizer = load(f"{args.ckpt}.f_{feature}.l_{layer}", args.attention_mode)
+            generate(model, tokenizer, args.greedy, args.temperature)

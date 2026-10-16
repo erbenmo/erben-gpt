@@ -4,8 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from erbentokenizer import CharacterTokenizer
-
 def causal_attention_multi_head(q, k, v):
     # q, k, v: (B, HC, N, HS)
     assert k.shape == v.shape and v.shape == q.shape
@@ -59,7 +57,7 @@ class Transformer(nn.Module):
             nn.Linear(feature_count * 4, feature_count)
         )
 
-    # features:
+    # features: (B, N, 16)
     def forward(self, features):
         normalized_features = self.ln(features)
 
@@ -77,11 +75,11 @@ class Transformer(nn.Module):
         k = torch.stack(k, dim=1)
         v = torch.stack(v, dim=1)
 
+        # attentions: (B, HC, N, HS)
         if self.attention_mode == "sdpa":
             attentions = F.scaled_dot_product_attention(q, k, v, is_causal = True)
         else:
             attentions = causal_attention_multi_head(q, k, v)
-        # attentions: (B, HC, N, HS)
 
         # merge all heads (B, HC, N, HS) into (B, N, 16)
         attentions = attentions.transpose(1, 2).flatten(-2)
@@ -97,12 +95,10 @@ class Transformer(nn.Module):
 
 # train a language model. token id is converted into 16 features and we use a linear layer to predict next token
 class LanguageModel(nn.Module):
-    def __init__(self, tokenizer, max_sequence, feature_count = 16, head_count = 4, layer_count = 2, attention_mode = "manual"):
+    def __init__(self, vocab_size, max_sequence, feature_count = 16, head_count = 4, layer_count = 2, attention_mode = "manual"):
         super().__init__()
 
-        self.tokenizer = tokenizer
-        vocab_size = self.tokenizer.vocab_size
-
+        self.vocab_size = vocab_size
         self.max_sequence = max_sequence
         self.feature_count = feature_count
         self.head_count = head_count
@@ -113,7 +109,7 @@ class LanguageModel(nn.Module):
             raise ValueError(f"feature count {feature_count} must be multiplier of head_count {head_count}")
 
         # embedding each token -> features
-        self.token_embeddings = nn.Embedding(vocab_size, feature_count)
+        self.token_embeddings = nn.Embedding(self.vocab_size, feature_count)
 
         # embed position -> feature
         self.position_embedding = nn.Embedding(max_sequence, feature_count)
@@ -127,7 +123,7 @@ class LanguageModel(nn.Module):
         self.ln_final = nn.LayerNorm(feature_count)
 
         # simple mapping: turn features -> next token prediction
-        self.linear = nn.Linear(feature_count, vocab_size)
+        self.linear = nn.Linear(feature_count, self.vocab_size)
 
     # tokens.shape = (batch, max_sequence (of this batch))
     def forward(self, tokens):
@@ -148,20 +144,18 @@ class LanguageModel(nn.Module):
         # final output: (B, N, vocab_size)
         return self.linear(features)
 
-    def save(self, ckpt_path):
-        ckpt = {'weight' : self.state_dict(),
-                'chars' : self.tokenizer.chars[:len(self.tokenizer.chars) - 1], # remove SEP
+    def save(self) -> dict:
+        ckpt = {'vocab_size' : self.vocab_size,
+                'weight' : self.state_dict(),
                 'max_sequence' : self.max_sequence,
                 'feature_count' : self.feature_count,
                 'head_count' : self.head_count,
                 "layer_count" : self.layer_count}
-        torch.save(ckpt, ckpt_path)
+        return ckpt
 
     @staticmethod
-    def load(ckpt_path, attention_mode):
-        ckpt = torch.load(ckpt_path)
-        tokenizer = CharacterTokenizer(ckpt['chars'])
-        model = LanguageModel(tokenizer,
+    def load(ckpt, attention_mode):
+        model = LanguageModel(ckpt['vocab_size'],
                               ckpt['max_sequence'],
                               ckpt['feature_count'],
                               ckpt['head_count'],
@@ -177,7 +171,6 @@ class LanguageModel(nn.Module):
         logits = logits.transpose(1, 2)
         loss = F.cross_entropy(logits, target, ignore_index = -100)
         return loss
-
 
     def train_step(self, optimizer, input, target):
         # forward pass - run model on prefix, generate loss against target
@@ -205,28 +198,3 @@ class LanguageModel(nn.Module):
         probability = torch.softmax(logits, dim = 0)
         # sample 1 token
         return torch.multinomial(probability, num_samples=1)[0]
-
-    @torch.no_grad()
-    def generate(self, greedy = False, temperature = 1):
-        samples = []
-        print("\nGeneration samples:")
-        # generate a few samples
-        for _ in range(10):
-            sample = ""
-            tokens = torch.tensor([self.tokenizer.sep_id])
-            while True:
-                logits = self(tokens.unsqueeze(0)) # unsqueeze for batching
-                logits = logits[0][-1] # only care about the last sampled token
-                new_token = LanguageModel.select_next_token(logits, greedy, temperature)
-                tokens = torch.cat([tokens, torch.tensor([new_token])])
-                char = self.tokenizer.decode(torch.tensor([new_token]))
-                if char == self.tokenizer.SEP:
-                    break
-                sample += char
-                if len(sample) >= self.max_sequence - 1:
-                    break
-            samples.append(sample)
-            print(sample)
-        return samples
-
-

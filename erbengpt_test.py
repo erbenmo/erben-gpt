@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.optim.adam import Adam
 
 from erbengpt import LanguageModel, causal_attention_multi_head
-from erbengptname import download_dataset, split_dataset, train_naming, validate_all, prepare_batch
+from erbengptname import download_dataset, split_dataset, train_naming, validate_all, prepare_batch, generate, save, load
 from erbentokenizer import BPETokenizer, CharacterTokenizer
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def test_small_model(dataset):
 
     # train on 8 dataset, validate all
     tokenizer = CharacterTokenizer(chars)
-    model = LanguageModel(tokenizer, max_sequence)
+    model = LanguageModel(tokenizer.vocab_size, max_sequence)
     optimizer = Adam(model.parameters(), lr=1e-3)
     train_naming(model, optimizer, tokenizer, train_data, val_data, steps)
 
@@ -58,8 +58,8 @@ def test_causal_mask(tokenizer):
     max_sequence = 5
 
     with(torch.no_grad()):
-        model = LanguageModel(tokenizer, max_sequence)
-        input = [model.tokenizer.encode(model.tokenizer.SEP + name) for name in names]
+        model = LanguageModel(tokenizer.vocab_size, max_sequence)
+        input = [tokenizer.encode(tokenizer.SEP + name) for name in names]
         input = torch.stack(input)
         logits = model(input)  # [batch, max(len(name))+1, vocab_size]
 
@@ -71,19 +71,19 @@ def test_save_load(tmp_path, tokenizer):
     name = "emma"
     max_sequence = 5
 
-    model1 = LanguageModel(tokenizer, max_sequence, 8, 2, 1)
-    input = model1.tokenizer.encode(model1.tokenizer.SEP + name)
+    model1 = LanguageModel(tokenizer.vocab_size, max_sequence, 8, 2, 1)
+    input = tokenizer.encode(tokenizer.SEP + name)
     input = torch.stack([input])
     with torch.no_grad():
         logits_old = model1(input)
 
     # save & load
     file = tmp_path / "ckpt.file"
-    model1.save(file)
-    model2 = LanguageModel.load(file, "sdpa")
+    save(model1, tokenizer, file)
+    model2, tokenizer2 = load(file, "sdpa")
 
     # verify model metadata are the same
-    assert model1.tokenizer.chars == model2.tokenizer.chars
+    assert tokenizer.chars == tokenizer2.chars
     assert model1.max_sequence == model2.max_sequence
     assert model1.feature_count == model2.feature_count
     assert model1.head_count == model2.head_count
@@ -99,7 +99,7 @@ def test_gradient(tokenizer):
     max_sequence = 5
 
     # train a small model with 1 step
-    model = LanguageModel(tokenizer, max_sequence, 4, 1, 1)
+    model = LanguageModel(tokenizer.vocab_size, max_sequence, 4, 1, 1)
     (input, target) = prepare_batch(names, tokenizer)
     loss = model._generate_loss(input, target)
     loss.backward()
@@ -141,8 +141,8 @@ def model_shape_helper(names, tokenizer):
     V = tokenizer.vocab_size
 
     # assert input shape (skip padding for now)
-    model = LanguageModel(tokenizer, max_sequence)
-    input = [model.tokenizer.encode(model.tokenizer.SEP + name) for name in names]
+    model = LanguageModel(tokenizer.vocab_size, max_sequence)
+    input = [tokenizer.encode(tokenizer.SEP + name) for name in names]
     input = torch.stack(input)
     assert input.shape == torch.Size((B, N))
 
@@ -163,7 +163,7 @@ def test_parameter_count(tokenizer):
     max_sequence = max(len(name) for name in names) + 1
     V = tokenizer.vocab_size
 
-    model = LanguageModel(tokenizer, max_sequence, feature_count = 24, head_count = 3, layer_count = 3)
+    model = LanguageModel(tokenizer.vocab_size, max_sequence, feature_count = 24, head_count = 3, layer_count = 3)
     D = model.feature_count
     hc = model.head_count
     H = int(D / hc)
@@ -220,25 +220,25 @@ def test_generation(tokenizer):
 
     max_sequence = 10
 
-    model = LanguageModel(tokenizer, max_sequence)
-    names = model.generate(greedy=True)
+    model = LanguageModel(tokenizer.vocab_size, max_sequence)
+    names = generate(model, tokenizer, greedy=True)
 
     assert len(set(names)) == 1
 
 def test_invalid_generation_temperature(tokenizer):
     max_sequence = 10
 
-    model = LanguageModel(tokenizer, max_sequence)
+    model = LanguageModel(tokenizer.vocab_size, max_sequence)
     with pytest.raises(ValueError):
-        model.generate(temperature = 0.0)
+        generate(model, tokenizer, temperature = 0.0)
 
 def test_manual_vs_sdpa_attention(tokenizer):
     names = ["emma", "henry", "natalie"]
     max_sequence = max(len(name) for name in names) + 1
 
     # create model 2 to be a clone of model1, but use sdpa
-    model1 = LanguageModel(tokenizer, max_sequence, attention_mode = "manual")
-    model2 = LanguageModel(tokenizer, max_sequence, attention_mode = "sdpa")
+    model1 = LanguageModel(tokenizer.vocab_size, max_sequence, attention_mode = "manual")
+    model2 = LanguageModel(tokenizer.vocab_size, max_sequence, attention_mode = "sdpa")
     model2.load_state_dict(copy.deepcopy(model1.state_dict()))
 
     # generate loss on both models - should look similar
@@ -262,8 +262,8 @@ def test_manual_vs_sdpa_attention(tokenizer):
 
 def attention_benchmark_helper(tokenizer, N):
     # create 2 array with different attention (manual vs sdpa) but same weight
-    model1 = LanguageModel(tokenizer, N, feature_count = 32, head_count = 4, layer_count = 2, attention_mode = "manual")
-    model2 = LanguageModel(tokenizer, N, feature_count = 32, head_count = 4, layer_count = 2, attention_mode = "sdpa")
+    model1 = LanguageModel(tokenizer.vocab_size, N, feature_count = 32, head_count = 4, layer_count = 2, attention_mode = "manual")
+    model2 = LanguageModel(tokenizer.vocab_size, N, feature_count = 32, head_count = 4, layer_count = 2, attention_mode = "sdpa")
     model2.load_state_dict(copy.deepcopy(model1.state_dict()))
 
     # prepare dataset and warm up
