@@ -1,3 +1,4 @@
+import os
 import heapq
 import pickle
 from itertools import pairwise
@@ -242,22 +243,22 @@ class CharacterTokenizer:
         assert encoded.ndim == 1
         return "".join([self.itoc(i) for i in encoded])
 
-def download_documents():
+def download_documents(doc_count = 1000):
     # download 1000 documents dataset from fineweb-edu
-    file = "fineweb-1000"
+    file = "fineweb-" + str(doc_count)
     if not Path(file).exists():
         dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
-        subset = Dataset.from_list(list(dataset.take(1000)))
-        subset.save_to_disk("fineweb-1000")
+        subset = Dataset.from_list(list(dataset.take(doc_count)))
+        subset.save_to_disk(file)
     else:
-        print("fineweb-1000 already exists")
-    dataset = Dataset.load_from_disk("fineweb-1000")
+        print(f"{file} already exists")
+    dataset = Dataset.load_from_disk(file)
     return [doc['text'] for doc in dataset]
 
 def split_documents(documents):
     l = len(documents)
-    split = int(l * 0.9)
-    return documents[0:split], documents[split:]
+    train, val = int(l * 0.9), int(l * 0.95)
+    return documents[0:train], documents[train:val], documents[val:]
 
 def train_bpe_tokenizer(train):
     # train Tokenizers
@@ -296,12 +297,15 @@ if __name__ == '__main__':
     random.seed(42)
 
     # load dataset
-    documents = download_documents()
+    D = 2000
+    path = "data-" + str(D)
+    os.makedirs(path, exist_ok=True)
+    documents = download_documents(D)
     random.shuffle(documents)
-    train, val = split_documents(documents)
-
+    train, val, test = split_documents(documents)
+    
     # train the tokenizer
-    file = "tokenizer.json"
+    file = path + "/" + "tokenizer.json"
     if not Path(file).exists():
         tokenizer = train_bpe_tokenizer(train)
         tokenizer.save(file)
@@ -310,10 +314,13 @@ if __name__ == '__main__':
     tokenizer = Tokenizer.from_file(file)
 
     # now encode the train and val dataset
-    train_file = "train.tokenized.npy"
-    val_file = "val.tokenized.npy"
+    train_file = path + "/" + "train.tokenized.npy"
+    val_file = path + "/" + "val.tokenized.npy"
+    test_file = path + "/" + "test.tokenized.npy"
     train_ids = get_tokenized_documents(train_file, tokenizer, train)
     val_ids = get_tokenized_documents(val_file, tokenizer, val)
+    test_ids = get_tokenized_documents(test_file, tokenizer, test)
+    print(f"train_ids length: {len(train_ids)}, val_ids length: {len(val_ids)}, test_ids length: {len(test_ids)}")
 
     # build dataset
     B = 5

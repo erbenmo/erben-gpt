@@ -9,7 +9,7 @@ def test_tokenizer(tmp_path):
     # load dataset
     documents = download_documents()
     random.shuffle(documents)
-    train, _ = split_documents(documents)
+    train, _, _ = split_documents(documents)
 
     # train tokenizer
     tokenizer = train_bpe_tokenizer(train)

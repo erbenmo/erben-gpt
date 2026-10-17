@@ -48,16 +48,16 @@ if __name__ == '__main__':
     parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
     args = parser.parse_args()
 
+    path = "data-2000"
     # get tokenizer
-    file = "tokenizer.json"
+    file = path + "/" + "tokenizer.json"
     tokenizer = Tokenizer.from_file(file)
 
-
-    model_ckpt = "model.web.ckpt"
+    model_ckpt = path + "/" + "model.web.ckpt"
     attention_mode="sdpa"
     max_sequence = 64
     val_batch = 64
-    val_file = "val.tokenized.npy"
+    val_file = path + "/" + "val.tokenized.npy"
     val_ids = np.load(val_file)
     val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence)
 
@@ -68,7 +68,7 @@ if __name__ == '__main__':
         print(f"Loaded model from checkpoint - model size: {model_size}")
     else:
         # get the tokenized dataset
-        train_file = "train.tokenized.npy"
+        train_file = path + "/" + "train.tokenized.npy"
         train_ids = np.load(train_file)
 
         vocab_size = tokenizer.get_vocab_size()
