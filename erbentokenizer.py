@@ -3,6 +3,8 @@ import heapq
 import pickle
 from itertools import pairwise
 from pathlib import Path
+import json
+import hashlib
 
 import torch
 from datasets import Dataset, load_dataset
@@ -293,8 +295,43 @@ def build_input_and_target(ids, B, N):
         target.append(torch.tensor(ids[pos+1:pos+1+N], dtype = torch.long))
     return torch.stack(inputs), torch.stack(target)
 
+
+def build_manifest(tokenizer: Tokenizer, tokenizer_file, train, val, test, train_ids, val_ids, test_ids, D, seed, path):
+    # get tokenizer file sha256
+    with open(tokenizer_file, "rb") as f:
+        digest = hashlib.file_digest(f, "sha256").hexdigest()
+    manifest = {
+        "path" : "HuggingFaceFW/fineweb-edu",
+        "name" : "sample-10BT",
+        "sample" : D,
+        "split" : [90, 5, 5],
+        "split_seed" : seed,
+        "train doc size" : len(train),
+        "val doc size" : len(val),
+        "test doc size" : len(test),
+        "train token size" : len(train_ids),
+        "val token size" : len(val_ids),
+        "test token size" : len(test_ids),
+        "vocab size" : tokenizer.get_vocab_size(),
+        "SEP" : SEP, 
+        "SEP id" : tokenizer.encode(SEP).ids[0],
+        "tokenizer-sha-256" : digest
+    }
+    manifest_file = path + "/" + "manifest.json"
+
+    if Path(manifest_file).exists():
+        with open(manifest_file, encoding="utf-8") as f:
+            existing = json.load(f)
+            if manifest != existing:
+                raise ValueError(f"Found existing manifest with mismatch. existing: {existing}, new: {manifest}")
+    else:
+        with open(manifest_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+
 if __name__ == '__main__':
-    random.seed(42)
+    seed = 42
+    random.seed(seed)
 
     # load dataset
     D = 2000
@@ -321,6 +358,8 @@ if __name__ == '__main__':
     val_ids = get_tokenized_documents(val_file, tokenizer, val)
     test_ids = get_tokenized_documents(test_file, tokenizer, test)
     print(f"train_ids length: {len(train_ids)}, val_ids length: {len(val_ids)}, test_ids length: {len(test_ids)}")
+
+    build_manifest(tokenizer, file, train, val, test, train_ids, val_ids, test_ids, D, seed, path)
 
     # build dataset
     B = 5
