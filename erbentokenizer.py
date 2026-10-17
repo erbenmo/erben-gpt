@@ -255,7 +255,6 @@ def download_documents():
     return [doc['text'] for doc in dataset]
 
 def split_documents(documents):
-
     l = len(documents)
     split = int(l * 0.9)
     return documents[0:split], documents[split:]
@@ -284,14 +283,14 @@ def get_tokenized_documents(file, tokenizer, documents):
     else:
         return tokenize_and_save_documents(file, tokenizer, documents)
 
-def build_input_and_expected(ids, B, N):
+def build_input_and_target(ids, B, N):
     inputs = []
-    expected = []
+    target = []
     for _ in range(B):
         pos = random.randrange(len(ids) - N)
         inputs.append(torch.tensor(ids[pos:pos+N], dtype = torch.long))
-        expected.append(torch.tensor(ids[pos+1:pos+1+N], dtype = torch.long))
-    return torch.stack(inputs), torch.stack(expected)
+        target.append(torch.tensor(ids[pos+1:pos+1+N], dtype = torch.long))
+    return torch.stack(inputs), torch.stack(target)
 
 if __name__ == '__main__':
     random.seed(42)
@@ -319,6 +318,6 @@ if __name__ == '__main__':
     # build dataset
     B = 5
     N = 5
-    inputs, expected = build_input_and_expected(train_ids, B, N)
+    inputs, target = build_input_and_target(train_ids, B, N)
     print(inputs)
-    print(expected)
+    print(target)

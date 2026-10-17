@@ -57,7 +57,7 @@ class Transformer(nn.Module):
             nn.Linear(feature_count * 4, feature_count)
         )
 
-    # features: (B, N, 16)
+    # features: (B, N, F)
     def forward(self, features):
         normalized_features = self.ln(features)
 
@@ -81,7 +81,7 @@ class Transformer(nn.Module):
         else:
             attentions = causal_attention_multi_head(q, k, v)
 
-        # merge all heads (B, HC, N, HS) into (B, N, 16)
+        # merge all heads (B, HC, N, HS) into (B, N, F)
         attentions = attentions.transpose(1, 2).flatten(-2)
         attentions = self.output_proj(attentions)
         # update original embeddings with attentions
@@ -93,7 +93,7 @@ class Transformer(nn.Module):
         features = features + mlp
         return features
 
-# train a language model. token id is converted into 16 features and we use a linear layer to predict next token
+# train a language model. token id is converted into F features and we use a linear layer to predict next token
 class LanguageModel(nn.Module):
     def __init__(self, vocab_size, max_sequence, feature_count = 16, head_count = 4, layer_count = 2, attention_mode = "manual"):
         super().__init__()
@@ -127,7 +127,7 @@ class LanguageModel(nn.Module):
 
     # tokens.shape = (batch, max_sequence (of this batch))
     def forward(self, tokens):
-        # features: [B, N, 16]
+        # features: [B, N, F]
         # token embeddings
         features = self.token_embeddings(tokens)
 
@@ -173,6 +173,9 @@ class LanguageModel(nn.Module):
         return loss
 
     def train_step(self, optimizer, input, target):
+        # enter train mode
+        self.train()
+
         # forward pass - run model on prefix, generate loss against target
         loss = self._generate_loss(input, target)
 

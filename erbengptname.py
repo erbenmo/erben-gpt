@@ -25,7 +25,6 @@ def download_dataset():
     with open(input_file) as f:
         dataset = [line.strip() for line in f]
     dataset = sorted(set(dataset)) # input may have duplicate
-    random.seed(42)
     random.shuffle(dataset)
     return dataset
 
@@ -124,6 +123,9 @@ def load(ckpt_path, attention_mode):
     return (model, tokenizer)
 
 if __name__ == '__main__':
+    random.seed(42)
+    torch.manual_seed(42)
+
     steps = 10000
 
     parser = argparse.ArgumentParser()
