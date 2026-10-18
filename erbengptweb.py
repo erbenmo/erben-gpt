@@ -10,6 +10,8 @@ import numpy as np
 from erbengpt import LanguageModel
 from erbentokenizer import build_input_and_target, SEP
 
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+
 @torch.no_grad()
 def validate(model: LanguageModel, input, target):
     model.eval()
@@ -39,6 +41,18 @@ def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, device, ma
 
     decoded = tokenizer.decode(encoded)
     return decoded
+
+def lr_strategy_scheduler(optimizer: AdamW, warmup_steps, total_steps, min_lr, peak_lr):
+    # warm up: linear scale up from min to peak
+    start_factor = min_lr / peak_lr
+    linear_lr = LinearLR(optimizer, start_factor, end_factor = 1.0, total_iters = warmup_steps)
+
+    # cosine decay from peak to min
+    cosine_lr = CosineAnnealingLR(optimizer, total_steps - warmup_steps, eta_min = min_lr)
+
+    # combine both
+    return SequentialLR(optimizer, [linear_lr, cosine_lr], milestones=[warmup_steps])
+
 
 if __name__ == '__main__':
     random.seed(42)
@@ -89,12 +103,18 @@ if __name__ == '__main__':
         model = model.to(device)
 
         # optimizer: AdamW - with weight decay for weight-only parameters
+        lr = 1e-3
         matrices = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
         vectors = [p for p in model.parameters() if p.requires_grad and p.dim() <= 1]
         optimizer = AdamW([
             {'params': matrices, 'weight_decay': 0.1},
             {'params': vectors, 'weight_decay': 0.0}
-        ], lr=1e-3)
+        ], lr)
+
+        # dynamic learning rate
+        warmup_steps = 20
+        min_lr = 1e-4
+        lr_scheduler = lr_strategy_scheduler(optimizer, warmup_steps, steps, min_lr, lr)
 
         for step in range(steps):
             if step % 100 == 0:
@@ -102,6 +122,7 @@ if __name__ == '__main__':
                 print(f"step: {step}, val loss: {loss.item()}")
             inputs, target = build_input_and_target(train_ids, train_batch, max_sequence, device)
             model.train_step(optimizer, inputs, target)
+            lr_scheduler.step()
 
         # saving model
         ckpt = model.save()
