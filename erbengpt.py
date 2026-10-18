@@ -194,7 +194,6 @@ class LanguageModel(nn.Module):
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         optimizer.step()
 
-
     def train_step(self, optimizer, input, target) -> torch.Tensor:
         # enter train mode
         self.train()
