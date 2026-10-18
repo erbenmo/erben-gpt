@@ -135,7 +135,6 @@ if __name__ == '__main__':
     parser.add_argument("--greedy", action = "store_true", help = "use greedy sampling")
     parser.add_argument("--temperature", type = float, default=1.0, help = "sampling temperature")
     parser.add_argument("--attention-mode", default = "manual", help = "manual attention vs sdpa")
-
     args = parser.parse_args()
 
     if args.experiment:
