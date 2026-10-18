@@ -183,6 +183,9 @@ class LanguageModel(nn.Module):
         # backward pass - find gradient, apply loss
         optimizer.zero_grad()
         loss.backward()
+
+        # clip gradients
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         optimizer.step()
 
         return loss
