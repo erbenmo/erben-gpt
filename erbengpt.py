@@ -173,7 +173,29 @@ class LanguageModel(nn.Module):
         loss = F.cross_entropy(logits, target, ignore_index = -100)
         return loss
 
-    def train_step(self, optimizer, input, target):
+    # run multiple forward run and accumulate gradients, then run gradient descent once
+    def train_batch(self, optimizer, train_data_batch):
+        self.train()
+        optimizer.zero_grad()
+
+        # forward run + accumulate gradient
+        for (input, target) in train_data_batch:
+            loss = self._generate_loss(input, target)
+            loss.backward()
+
+        # now average the accumulated gradient
+        batch_size = len(train_data_batch)
+        for p in self.parameters():
+            if p.requires_grad:
+                p.grad /= batch_size
+
+        # finally run optimizer 
+        # clip gradients
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        optimizer.step()
+
+
+    def train_step(self, optimizer, input, target) -> torch.Tensor:
         # enter train mode
         self.train()
 

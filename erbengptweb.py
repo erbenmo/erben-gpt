@@ -53,6 +53,52 @@ def lr_strategy_scheduler(optimizer: AdamW, warmup_steps, total_steps, min_lr, p
     # combine both
     return SequentialLR(optimizer, [linear_lr, cosine_lr], milestones=[warmup_steps])
 
+def train_web_model(tokenizer: Tokenizer, path, max_sequence, attention_mode, 
+                    val_input, val_target, device) -> LanguageModel:
+    # get the tokenized dataset
+    train_file = path + "/" + "train.tokenized.npy"
+    train_ids = np.load(train_file)
+
+    vocab_size = tokenizer.get_vocab_size()
+    feature_count = 64
+    head_count = 4
+    layer_count = 2
+
+    model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count, attention_mode)
+    model = model.to(device)
+
+    # optimizer: AdamW - with weight decay for weight-only parameters
+    lr = 1e-3
+    matrices = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
+    vectors = [p for p in model.parameters() if p.requires_grad and p.dim() <= 1]
+    optimizer = AdamW([
+        {'params': matrices, 'weight_decay': 0.1},
+        {'params': vectors, 'weight_decay': 0.0}
+    ], lr)
+
+    # dynamic learning rate
+    steps = 500
+    warmup_steps = 20
+    min_lr = 1e-4
+    lr_scheduler = lr_strategy_scheduler(optimizer, warmup_steps, steps, min_lr, lr)
+    train_batch = 8
+    accumulation_steps = 4
+
+    # train the actual models
+    for step in range(steps):
+        if step % 100 == 0:
+            loss = validate(model, val_input, val_target)
+            print(f"step: {step}, val loss: {loss.item()}")
+
+        # accumulate multiple forward runs, then run gradient descent once
+        train_data_batch = []
+        for _ in range(accumulation_steps):
+            train_data_batch.append(build_input_and_target(train_ids, train_batch, max_sequence, device))
+        model.train_batch(optimizer, train_data_batch)
+        lr_scheduler.step()
+
+    return model
+
 
 if __name__ == '__main__':
     random.seed(42)
@@ -88,42 +134,8 @@ if __name__ == '__main__':
         model_size = sum(p.numel() for p in model.parameters())
         print(f"Loaded model from checkpoint - model size: {model_size}")
     else:
-        # get the tokenized dataset
-        train_file = path + "/" + "train.tokenized.npy"
-        train_ids = np.load(train_file)
-
-        vocab_size = tokenizer.get_vocab_size()
-        feature_count = 64
-        head_count = 4
-        layer_count = 2
-        steps = 500
-        train_batch = 8
-
-        model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count, attention_mode)
-        model = model.to(device)
-
-        # optimizer: AdamW - with weight decay for weight-only parameters
-        lr = 1e-3
-        matrices = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
-        vectors = [p for p in model.parameters() if p.requires_grad and p.dim() <= 1]
-        optimizer = AdamW([
-            {'params': matrices, 'weight_decay': 0.1},
-            {'params': vectors, 'weight_decay': 0.0}
-        ], lr)
-
-        # dynamic learning rate
-        warmup_steps = 20
-        min_lr = 1e-4
-        lr_scheduler = lr_strategy_scheduler(optimizer, warmup_steps, steps, min_lr, lr)
-
-        for step in range(steps):
-            if step % 100 == 0:
-                loss = validate(model, val_input, val_target)
-                print(f"step: {step}, val loss: {loss.item()}")
-            inputs, target = build_input_and_target(train_ids, train_batch, max_sequence, device)
-            model.train_step(optimizer, inputs, target)
-            lr_scheduler.step()
-
+        model = train_web_model(tokenizer, path, max_sequence, attention_mode, 
+                                val_input, val_target, device)
         # saving model
         ckpt = model.save()
         print(f"Saving checkpoint: {model_ckpt}")
