@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-def causal_attention_multi_head(q, k, v):
+def causal_attention_multi_head(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
     # q, k, v: (B, HC, N, HS)
     assert k.shape == v.shape and v.shape == q.shape
     head_size = k.shape[-1]
@@ -14,7 +14,8 @@ def causal_attention_multi_head(q, k, v):
 
     # then mask attention for (q, later k) to be -inf to ignore them (self attention)
     n = logits.shape[-2]
-    mask = torch.triu(torch.ones(n, n, dtype=torch.bool), diagonal=1)
+    device = q.device
+    mask = torch.triu(torch.ones(n, n, dtype=torch.bool, device=device), diagonal=1)
     logits = logits.masked_fill(mask, float('-inf'))
 
     # finally calculate weight and multiple with v and sum
@@ -126,14 +127,14 @@ class LanguageModel(nn.Module):
         self.linear = nn.Linear(feature_count, self.vocab_size)
 
     # tokens.shape = (batch, max_sequence (of this batch))
-    def forward(self, tokens):
+    def forward(self, tokens: torch.Tensor):
         # features: [B, N, F]
         # token embeddings
         features = self.token_embeddings(tokens)
 
         # position embedding, positions is just a batch of [0, 1, 2, 3,...]
         batch_size, max_sequence = tokens.shape[0], tokens.shape[1]
-        positions = torch.stack([torch.arange(max_sequence) for _ in range(batch_size)])
+        positions = torch.stack([torch.arange(max_sequence, device = tokens.device) for _ in range(batch_size)])
         features += self.position_embedding(positions)
 
         # transformer blocks

@@ -286,15 +286,14 @@ def get_tokenized_documents(file, tokenizer, documents):
     else:
         return tokenize_and_save_documents(file, tokenizer, documents)
 
-def build_input_and_target(ids, B, N):
+def build_input_and_target(ids, B, N, device):
     inputs = []
     target = []
     for _ in range(B):
         pos = random.randrange(len(ids) - N)
-        inputs.append(torch.tensor(ids[pos:pos+N], dtype = torch.long))
-        target.append(torch.tensor(ids[pos+1:pos+1+N], dtype = torch.long))
+        inputs.append(torch.tensor(ids[pos:pos+N], dtype = torch.long, device = device))
+        target.append(torch.tensor(ids[pos+1:pos+1+N], dtype = torch.long, device = device))
     return torch.stack(inputs), torch.stack(target)
-
 
 def build_manifest(tokenizer: Tokenizer, tokenizer_file, train, val, test, train_ids, val_ids, test_ids, D, seed, path):
     # get tokenizer file sha256
@@ -364,6 +363,6 @@ if __name__ == '__main__':
     # build dataset
     B = 5
     N = 5
-    inputs, target = build_input_and_target(train_ids, B, N)
+    inputs, target = build_input_and_target(train_ids, B, N, torch.device('cpu'))
     print(inputs)
     print(target)

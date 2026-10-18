@@ -16,7 +16,7 @@ def validate(model: LanguageModel, input, target):
     return model._generate_loss(input, target)
 
 @torch.no_grad()
-def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, max_generation = 64):
+def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, device, max_generation = 64):
     model.eval()
     if prompt == "":
         prompt = SEP
@@ -25,7 +25,7 @@ def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, max_genera
     sep_id = tokenizer.encode(SEP).ids[0]
     for _ in range(max_generation):
         # bound the context window size, and create a batch of 1
-        input = torch.tensor(encoded[-model.max_sequence:]).unsqueeze(0) 
+        input = torch.tensor(encoded[-model.max_sequence:], device = device).unsqueeze(0) 
 
         # (B, N, vocab_size)
         logits = model(input)
@@ -44,6 +44,13 @@ if __name__ == '__main__':
     random.seed(42)
     torch.manual_seed(42)
 
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
     args = parser.parse_args()
@@ -59,11 +66,11 @@ if __name__ == '__main__':
     val_batch = 64
     val_file = path + "/" + "val.tokenized.npy"
     val_ids = np.load(val_file)
-    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence)
+    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence, device)
 
     if args.load:
-        ckpt = torch.load(model_ckpt)
-        model = LanguageModel.load(ckpt, attention_mode)
+        ckpt = torch.load(model_ckpt, 'cpu')
+        model = LanguageModel.load(ckpt, attention_mode).to(device)
         model_size = sum(p.numel() for p in model.parameters())
         print(f"Loaded model from checkpoint - model size: {model_size}")
     else:
@@ -79,13 +86,13 @@ if __name__ == '__main__':
         train_batch = 8
 
         model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count, attention_mode)
+        model = model.to(device)
         optimizer = Adam(model.parameters(), lr=1e-3)
-
         for step in range(steps):
             if step % 100 == 0:
                 loss = validate(model, val_input, val_target)
                 print(f"step: {step}, val loss: {loss.item()}")
-            inputs, target = build_input_and_target(train_ids, train_batch, max_sequence)
+            inputs, target = build_input_and_target(train_ids, train_batch, max_sequence, device)
             model.train_step(optimizer, inputs, target)
 
         # saving model
@@ -100,5 +107,5 @@ if __name__ == '__main__':
     # generate some stuff from this model
     prompt = "Baby squirrel is"
     print(f"\nGenerating from {prompt}:")
-    output = generate(model, tokenizer, prompt, max_generation = 120)
+    output = generate(model, tokenizer, prompt, device, max_generation = 120)
     print(output)

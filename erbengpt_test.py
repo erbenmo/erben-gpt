@@ -109,10 +109,10 @@ def test_gradient(tokenizer):
         assert params.grad is not None, f"grad is None for {name}"
         assert torch.isfinite(params.grad).all(), f"grad is not finite for {name}, grad: {params.grad}"
 
-def causal_attention_helper(B, HC, N, HS):
-    q = torch.randn(B, HC, N, HS, requires_grad = True)
-    k = torch.randn(B, HC, N, HS, requires_grad = True)
-    v = torch.randn(B, HC, N, HS, requires_grad = True)
+def causal_attention_helper(B, HC, N, HS, device):
+    q = torch.randn(B, HC, N, HS, requires_grad = True, device = device)
+    k = torch.randn(B, HC, N, HS, requires_grad = True, device = device)
+    v = torch.randn(B, HC, N, HS, requires_grad = True, device = device)
     q2 = q.detach().clone().requires_grad_(True)
     k2 = k.detach().clone().requires_grad_(True)
     v2 = v.detach().clone().requires_grad_(True)
@@ -130,9 +130,14 @@ def causal_attention_helper(B, HC, N, HS):
     torch.testing.assert_close(v.grad, v2.grad, msg = f"v gradient doesn't match: {v.grad}, {v2.grad}")
 
 def test_causal_attention():
-    causal_attention_helper(B=10, HC = 4, N=10, HS=16)
-    causal_attention_helper(B=10, HC = 4, N=1, HS=16)
-    causal_attention_helper(B=1, HC = 4, N=1, HS=16)
+    devices = [torch.device("cpu")]
+    if torch.backends.mps.is_available():
+        devices.append(torch.device("mps"))
+
+    for device in devices:
+        causal_attention_helper(B=10, HC = 4, N=10, HS=16, device=device)
+        causal_attention_helper(B=10, HC = 4, N=1, HS=16, device=device)
+        causal_attention_helper(B=1, HC = 4, N=1, HS=16, device=device)
 
 def model_shape_helper(names, tokenizer):
     max_sequence = max(len(name) for name in names) + 1
