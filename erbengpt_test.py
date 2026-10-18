@@ -47,6 +47,38 @@ def test_small_model(dataset):
     loss = validate_all(model, tokenizer, train_data, 8)
     assert 0.291 <= loss and loss <= 0.292
 
+def test_train_model_batch(dataset):
+    (chars, max_sequence, train_data, _) = dataset
+
+    # train_data with 8 names
+    train_data = ['aukai', 'ellanore', 'liem', 'aquarius', 'joangel', 'wryn', 'isabela', 'astryd']
+
+    # train on 8 dataset, validate all
+    tokenizer = CharacterTokenizer(chars)
+    model = LanguageModel(tokenizer.vocab_size, max_sequence)
+    optimizer = Adam(model.parameters(), lr=1e-3)
+    train_batch = 32
+    name_idx = 0  # cursor into dataset, advances across steps                        
+
+    loss = validate_all(model, tokenizer, train_data, 8)
+    print(f"loss before batch train: {loss}")
+
+    # training batch
+    names = []
+    for _ in range(train_batch):
+        names.append(train_data[name_idx % len(train_data)])
+        name_idx += 1
+
+    # forward pass - run model on prefix, generate loss against target
+    for _ in range(100):
+        data_batch = []
+        for _ in range(4):
+            data_batch.append(prepare_batch(names, tokenizer))
+        model.train_batch(optimizer, data_batch)
+    
+    loss = validate_all(model, tokenizer, train_data, 8)
+    print(f"loss after batch train: {loss}")
+
 def test_causal_mask(tokenizer):
     # compare 2 name with same prefix
     names = ["emma", "emmy"]
