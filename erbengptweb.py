@@ -2,7 +2,7 @@ import argparse
 import random
 
 import torch
-from torch.optim.adam import Adam
+from torch.optim.adamw import AdamW
 
 from tokenizers import Tokenizer
 import numpy as np
@@ -87,7 +87,15 @@ if __name__ == '__main__':
 
         model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count, attention_mode)
         model = model.to(device)
-        optimizer = Adam(model.parameters(), lr=1e-3)
+
+        # optimizer: AdamW - with weight decay for weight-only parameters
+        matrices = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
+        vectors = [p for p in model.parameters() if p.requires_grad and p.dim() <= 1]
+        optimizer = AdamW([
+            {'params': matrices, 'weight_decay': 0.1},
+            {'params': vectors, 'weight_decay': 0.0}
+        ], lr=1e-3)
+
         for step in range(steps):
             if step % 100 == 0:
                 loss = validate(model, val_input, val_target)
