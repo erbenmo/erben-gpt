@@ -286,11 +286,14 @@ def get_tokenized_documents(file, tokenizer, documents):
     else:
         return tokenize_and_save_documents(file, tokenizer, documents)
 
-def build_input_and_target(ids, B, N, device):
+def build_input_and_target(ids, B, N, device, rng = None):
     inputs = []
     target = []
     for _ in range(B):
-        pos = random.randrange(len(ids) - N)
+        if rng:
+            pos = rng.randrange(len(ids) - N)
+        else:
+            pos = random.randrange(len(ids) - N)
         inputs.append(torch.tensor(ids[pos:pos+N], dtype = torch.long, device = device))
         target.append(torch.tensor(ids[pos+1:pos+1+N], dtype = torch.long, device = device))
     return torch.stack(inputs), torch.stack(target)

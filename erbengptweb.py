@@ -118,13 +118,11 @@ def load_checkpoint(model_ckpt) -> tuple[LanguageModel, AdamW, LRScheduler]:
     return model, optimizer, lr_scheduler
 
 def train_web_model(model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
-                    max_sequence, train_ids, val_ids, device):
+                    max_sequence, train_ids, val_input, val_target, device):
     # dynamic learning rate
     steps = 500
     train_batch = 8
     accumulation_steps = 4
-    val_batch = 64
-    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence, device)
 
     # train the actual models
     for step in range(steps):
@@ -172,6 +170,9 @@ if __name__ == '__main__':
     # get tokenized val dataset
     val_file = path + "/" + "val.tokenized.npy"
     val_ids = np.load(val_file)
+    val_batch = 64
+    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence, device,
+                                                   random.Random(42))
 
     # get the tokenized train dataset
     train_file = path + "/" + "train.tokenized.npy"
@@ -186,12 +187,10 @@ if __name__ == '__main__':
 
     # train and save the initial model
     if not args.val_only:
-        train_web_model(model, optimizer, lr_scheduler, max_sequence, train_ids, val_ids, device)
+        train_web_model(model, optimizer, lr_scheduler, max_sequence, train_ids, val_input, val_target, device)
         save_checkpoint(model_ckpt, model, optimizer, lr_scheduler)
 
     # validate model
-    val_batch = 64
-    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence, device)
     loss = validate(model, val_input, val_target)
     print(f"Final loss: {loss.item()}")
 
