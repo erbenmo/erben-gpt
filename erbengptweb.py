@@ -10,7 +10,7 @@ import numpy as np
 from erbengpt import LanguageModel
 from erbentokenizer import build_input_and_target, SEP
 
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import LRScheduler, CosineAnnealingLR, LinearLR, SequentialLR
 
 @torch.no_grad()
 def validate(model: LanguageModel, input, target):
@@ -42,33 +42,16 @@ def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, device, ma
     decoded = tokenizer.decode(encoded)
     return decoded
 
-def lr_strategy_scheduler(optimizer: AdamW, warmup_steps, total_steps, min_lr, peak_lr):
-    # warm up: linear scale up from min to peak
-    start_factor = min_lr / peak_lr
-    linear_lr = LinearLR(optimizer, start_factor, end_factor = 1.0, total_iters = warmup_steps)
-
-    # cosine decay from peak to min
-    cosine_lr = CosineAnnealingLR(optimizer, total_steps - warmup_steps, eta_min = min_lr)
-
-    # combine both
-    return SequentialLR(optimizer, [linear_lr, cosine_lr], milestones=[warmup_steps])
-
-def train_web_model(tokenizer: Tokenizer, path, max_sequence, attention_mode, 
-                    val_input, val_target, device) -> LanguageModel:
-    # get the tokenized dataset
-    train_file = path + "/" + "train.tokenized.npy"
-    train_ids = np.load(train_file)
-
-    vocab_size = tokenizer.get_vocab_size()
+def create_model(vocab_size, max_sequence, attention_mode, device) -> LanguageModel:
     feature_count = 64
     head_count = 4
     layer_count = 2
-
     model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count, attention_mode)
     model = model.to(device)
+    return model
 
+def create_adamw_optimizer(model, lr) -> AdamW:
     # optimizer: AdamW - with weight decay for weight-only parameters
-    lr = 1e-3
     matrices = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
     vectors = [p for p in model.parameters() if p.requires_grad and p.dim() <= 1]
     optimizer = AdamW([
@@ -76,13 +59,72 @@ def train_web_model(tokenizer: Tokenizer, path, max_sequence, attention_mode,
         {'params': vectors, 'weight_decay': 0.0}
     ], lr)
 
+    return optimizer
+
+def create_lr_scheduler(optimizer: AdamW, total_iters, peak_lr) -> LRScheduler:
+    # warm up: linear scale up from min to peak
+    start_factor = 0.1
+    min_lr = start_factor * peak_lr
+    end_factor = 1.0
+    warmup_iters = 20
+    linear_lr = LinearLR(optimizer, start_factor, end_factor, warmup_iters)
+
+    # cosine decay from peak to min
+    cosine_lr = CosineAnnealingLR(optimizer, total_iters - warmup_iters, min_lr)
+
+    # combine both
+    milestones=[warmup_iters]
+    return SequentialLR(optimizer, [linear_lr, cosine_lr], milestones)
+
+def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
+                    lr_scheduler: LRScheduler):
+    ckpt = model.save()
+    ckpt.update({
+        'optimizer': optimizer.state_dict(),
+        'lr_scheduler': lr_scheduler.state_dict(),
+        'python' : random.getstate(),
+        'torch' : torch.get_rng_state(),
+        'numpy' : np.random.get_state(),
+    })
+    if torch.cuda.is_available():
+        ckpt['cuda'] = torch.cuda.get_rng_state_all()
+    if torch.backends.mps.is_available():
+        ckpt['mps'] = torch.mps.get_rng_state()
+
+    torch.save(ckpt, ckpt_file)
+    print(f"Saved checkpoint: {ckpt_file}")
+
+def load_checkpoint(model_ckpt) -> tuple[LanguageModel, AdamW, LRScheduler]:
+    ckpt = torch.load(model_ckpt, 'cpu', weights_only = False)
+    model = LanguageModel.load(ckpt, attention_mode).to(device)
+    optimizer = create_adamw_optimizer(model, lr)
+    # creating scheduler will overwrite the learning rate in optimizer
+    # so do it first, then reload the optimizer learning rate from checkpoint
+    lr_scheduler = create_lr_scheduler(optimizer, total_steps, lr)
+    optimizer.load_state_dict(ckpt['optimizer'])
+    lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
+
+    # load random state last, so that random state doesn't get updated again by
+    # things like creating a new model with random weights
+    random.setstate(ckpt['python'])
+    torch.set_rng_state(ckpt['torch'].cpu())
+    np.random.set_state(ckpt['numpy'])
+    if "cuda" in ckpt:
+        torch.cuda.set_rng_state_all([s.cpu() for s in ckpt["cuda"]])
+    if "mps" in ckpt:
+        torch.mps.set_rng_state(ckpt["mps"].cpu())
+
+    print(f"Loaded checkpoint: {model_ckpt}")
+    return model, optimizer, lr_scheduler
+
+def train_web_model(model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
+                    max_sequence, train_ids, val_ids, device):
     # dynamic learning rate
     steps = 500
-    warmup_steps = 20
-    min_lr = 1e-4
-    lr_scheduler = lr_strategy_scheduler(optimizer, warmup_steps, steps, min_lr, lr)
     train_batch = 8
     accumulation_steps = 4
+    val_batch = 64
+    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence, device)
 
     # train the actual models
     for step in range(steps):
@@ -97,12 +139,10 @@ def train_web_model(tokenizer: Tokenizer, path, max_sequence, attention_mode,
         model.train_batch(optimizer, train_data_batch)
         lr_scheduler.step()
 
-    return model
-
 
 if __name__ == '__main__':
-    random.seed(42)
-    torch.manual_seed(42)
+    total_steps = 10000
+    lr = 1e-3
 
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -113,7 +153,12 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
+    parser.add_argument("--val-only", action = "store_true", help = "skip training, just validation")
+
     args = parser.parse_args()
+
+    random.seed(42)
+    torch.manual_seed(42)
 
     path = "data-2000"
     # get tokenizer
@@ -123,25 +168,30 @@ if __name__ == '__main__':
     model_ckpt = path + "/" + "model.web.ckpt"
     attention_mode="sdpa"
     max_sequence = 64
-    val_batch = 64
+
+    # get tokenized val dataset
     val_file = path + "/" + "val.tokenized.npy"
     val_ids = np.load(val_file)
-    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence, device)
+
+    # get the tokenized train dataset
+    train_file = path + "/" + "train.tokenized.npy"
+    train_ids = np.load(train_file)
 
     if args.load:
-        ckpt = torch.load(model_ckpt, 'cpu')
-        model = LanguageModel.load(ckpt, attention_mode).to(device)
-        model_size = sum(p.numel() for p in model.parameters())
-        print(f"Loaded model from checkpoint - model size: {model_size}")
+        model, optimizer, lr_scheduler = load_checkpoint(model_ckpt)
     else:
-        model = train_web_model(tokenizer, path, max_sequence, attention_mode, 
-                                val_input, val_target, device)
-        # saving model
-        ckpt = model.save()
-        print(f"Saving checkpoint: {model_ckpt}")
-        torch.save(ckpt, model_ckpt)
+        model = create_model(tokenizer.get_vocab_size(), max_sequence, attention_mode, device)
+        optimizer = create_adamw_optimizer(model, lr)
+        lr_scheduler = create_lr_scheduler(optimizer, total_steps, lr)
+
+    # train and save the initial model
+    if not args.val_only:
+        train_web_model(model, optimizer, lr_scheduler, max_sequence, train_ids, val_ids, device)
+        save_checkpoint(model_ckpt, model, optimizer, lr_scheduler)
 
     # validate model
+    val_batch = 64
+    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence, device)
     loss = validate(model, val_input, val_target)
     print(f"Final loss: {loss.item()}")
 
