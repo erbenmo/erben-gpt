@@ -42,7 +42,8 @@ def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, device, ma
     decoded = tokenizer.decode(encoded)
     return decoded
 
-def create_model(vocab_size, max_sequence, attention_mode, device) -> LanguageModel:
+def create_model(vocab_size, max_sequence, device) -> LanguageModel:
+    attention_mode="sdpa"
     feature_count = 64
     head_count = 4
     layer_count = 2
@@ -94,9 +95,9 @@ def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
     torch.save(ckpt, ckpt_file)
     print(f"Saved checkpoint: {ckpt_file}")
 
-def load_checkpoint(model_ckpt) -> tuple[LanguageModel, AdamW, LRScheduler]:
+def load_checkpoint(model_ckpt, device, total_steps, lr) -> tuple[LanguageModel, AdamW, LRScheduler]:
     ckpt = torch.load(model_ckpt, 'cpu', weights_only = False)
-    model = LanguageModel.load(ckpt, attention_mode).to(device)
+    model = LanguageModel.load(ckpt).to(device)
     optimizer = create_adamw_optimizer(model, lr)
     # creating scheduler will overwrite the learning rate in optimizer
     # so do it first, then reload the optimizer learning rate from checkpoint
@@ -117,10 +118,9 @@ def load_checkpoint(model_ckpt) -> tuple[LanguageModel, AdamW, LRScheduler]:
     print(f"Loaded checkpoint: {model_ckpt}")
     return model, optimizer, lr_scheduler
 
-def train_web_model(model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
+def train_web_model(steps, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
                     max_sequence, train_ids, val_input, val_target, device):
     # dynamic learning rate
-    steps = 500
     train_batch = 8
     accumulation_steps = 4
 
@@ -137,23 +137,9 @@ def train_web_model(model: LanguageModel, optimizer: AdamW, lr_scheduler: LRSche
         model.train_batch(optimizer, train_data_batch)
         lr_scheduler.step()
 
-
-if __name__ == '__main__':
+def train_job(device, load, val_only):
     total_steps = 10000
     lr = 1e-3
-
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
-    parser.add_argument("--val-only", action = "store_true", help = "skip training, just validation")
-
-    args = parser.parse_args()
 
     random.seed(42)
     torch.manual_seed(42)
@@ -164,7 +150,6 @@ if __name__ == '__main__':
     tokenizer = Tokenizer.from_file(file)
 
     model_ckpt = path + "/" + "model.web.ckpt"
-    attention_mode="sdpa"
     max_sequence = 64
 
     # get tokenized val dataset
@@ -178,21 +163,39 @@ if __name__ == '__main__':
     train_file = path + "/" + "train.tokenized.npy"
     train_ids = np.load(train_file)
 
-    if args.load:
-        model, optimizer, lr_scheduler = load_checkpoint(model_ckpt)
+    if load:
+        model, optimizer, lr_scheduler = load_checkpoint(model_ckpt, device, total_steps, lr)
     else:
-        model = create_model(tokenizer.get_vocab_size(), max_sequence, attention_mode, device)
+        model = create_model(tokenizer.get_vocab_size(), max_sequence, device)
         optimizer = create_adamw_optimizer(model, lr)
         lr_scheduler = create_lr_scheduler(optimizer, total_steps, lr)
 
     # train and save the initial model
-    if not args.val_only:
-        train_web_model(model, optimizer, lr_scheduler, max_sequence, train_ids, val_input, val_target, device)
+    if not val_only:
+        steps = 500
+        train_web_model(steps, model, optimizer, lr_scheduler, max_sequence, train_ids, val_input, val_target, device)
         save_checkpoint(model_ckpt, model, optimizer, lr_scheduler)
 
     # validate model
     loss = validate(model, val_input, val_target)
     print(f"Final loss: {loss.item()}")
+
+    return model, tokenizer, device
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
+    parser.add_argument("--val-only", action = "store_true", help = "skip training, just validation")
+    args = parser.parse_args()
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
+    model, tokenizer, device = train_job(device, args.load, args.val_only)
 
     # generate some stuff from this model
     prompt = "Baby squirrel is"

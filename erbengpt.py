@@ -151,17 +151,18 @@ class LanguageModel(nn.Module):
                 'max_sequence' : self.max_sequence,
                 'feature_count' : self.feature_count,
                 'head_count' : self.head_count,
-                "layer_count" : self.layer_count}
+                "layer_count" : self.layer_count,
+                "attention_mode" : self.attention_mode}
         return ckpt
 
     @staticmethod
-    def load(ckpt, attention_mode):
+    def load(ckpt):
         model = LanguageModel(ckpt['vocab_size'],
                               ckpt['max_sequence'],
                               ckpt['feature_count'],
                               ckpt['head_count'],
                               ckpt['layer_count'],
-                              attention_mode)
+                              ckpt['attention_mode'])
         model.load_state_dict(ckpt['weight'])
         return model
 

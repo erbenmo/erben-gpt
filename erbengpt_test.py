@@ -107,7 +107,7 @@ def test_save_load(tmp_path, tokenizer):
     # save & load
     file = tmp_path / "ckpt.file"
     save(model1, tokenizer, file)
-    model2, tokenizer2 = load(file, "sdpa")
+    model2, tokenizer2 = load(file)
 
     # verify model metadata are the same
     assert tokenizer.chars == tokenizer2.chars
@@ -115,6 +115,7 @@ def test_save_load(tmp_path, tokenizer):
     assert model1.feature_count == model2.feature_count
     assert model1.head_count == model2.head_count
     assert model1.layer_count == model2.layer_count
+    assert model1.attention_mode == model2.attention_mode
 
     # verify logits are the same
     with torch.no_grad():
@@ -343,4 +344,4 @@ def test_prepare_batch(tokenizer):
     expected_input = torch.tensor([[26, 4, 12, 12, 0], [26, 0, 11, 26, 26]])
     expected_target = torch.tensor([[4, 12, 12, 0, 26], [0, 11, 26, -100, -100]])
     torch.testing.assert_close(input, expected_input)
-    torch.testing.assert_close(target, expected_target)    
+    torch.testing.assert_close(target, expected_target)

@@ -116,10 +116,10 @@ def save(model: LanguageModel, tokenizer, ckpt_path):
     ckpt['chars'] = tokenizer.chars[:len(tokenizer.chars) - 1] # remove SEP    
     torch.save(ckpt, ckpt_path)
 
-def load(ckpt_path, attention_mode):
+def load(ckpt_path):
     ckpt = torch.load(ckpt_path)
     tokenizer = CharacterTokenizer(ckpt['chars'])
-    model = LanguageModel.load(ckpt, attention_mode)
+    model = LanguageModel.load(ckpt)
     return (model, tokenizer)
 
 if __name__ == '__main__':
@@ -131,7 +131,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
     parser.add_argument("--experiment", action = "store_true", help = "experiment with different feature & layer count")
-    parser.add_argument("--ckpt", default = "./ckpt-file")
+    parser.add_argument("--ckpt", default = "./checkpoints/name", help = "checkpoint file path & prefix")
     parser.add_argument("--greedy", action = "store_true", help = "use greedy sampling")
     parser.add_argument("--temperature", type = float, default=1.0, help = "sampling temperature")
     parser.add_argument("--attention-mode", default = "manual", help = "manual attention vs sdpa")
@@ -168,5 +168,5 @@ if __name__ == '__main__':
             generate(model, tokenizer, args.greedy, args.temperature)
     else:
         for (feature, layer) in feature_layers:
-            model, tokenizer = load(f"{args.ckpt}.f_{feature}.l_{layer}", args.attention_mode)
+            model, tokenizer = load(f"{args.ckpt}.f_{feature}.l_{layer}")
             generate(model, tokenizer, args.greedy, args.temperature)

@@ -247,7 +247,7 @@ class CharacterTokenizer:
 
 def download_documents(doc_count = 1000):
     # download 1000 documents dataset from fineweb-edu
-    file = "fineweb-" + str(doc_count)
+    file = "dataset/" + "fineweb-" + str(doc_count)
     if not Path(file).exists():
         dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
         subset = Dataset.from_list(list(dataset.take(doc_count)))
