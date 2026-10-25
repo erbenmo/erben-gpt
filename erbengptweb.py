@@ -62,7 +62,7 @@ def create_adamw_optimizer(model, lr) -> AdamW:
 
     return optimizer
 
-def create_lr_scheduler(optimizer: AdamW, total_iters, peak_lr) -> LRScheduler:
+def create_lr_scheduler(optimizer: AdamW, peak_lr, total_iters = 10000) -> LRScheduler:
     # warm up: linear scale up from min to peak
     start_factor = 0.1
     min_lr = start_factor * peak_lr
@@ -78,7 +78,7 @@ def create_lr_scheduler(optimizer: AdamW, total_iters, peak_lr) -> LRScheduler:
     return SequentialLR(optimizer, [linear_lr, cosine_lr], milestones)
 
 def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
-                    lr_scheduler: LRScheduler):
+                    lr_scheduler: LRScheduler, completed_steps: int):
     ckpt = model.save()
     ckpt.update({
         'optimizer': optimizer.state_dict(),
@@ -92,16 +92,18 @@ def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
     if torch.backends.mps.is_available():
         ckpt['mps'] = torch.mps.get_rng_state()
 
+    ckpt['completed-steps'] = completed_steps
+
     torch.save(ckpt, ckpt_file)
     print(f"Saved checkpoint: {ckpt_file}")
 
-def load_checkpoint(model_ckpt, device, total_steps, lr) -> tuple[LanguageModel, AdamW, LRScheduler]:
+def load_checkpoint(model_ckpt, device, lr) -> tuple[LanguageModel, AdamW, LRScheduler, int]:
     ckpt = torch.load(model_ckpt, 'cpu', weights_only = False)
     model = LanguageModel.load(ckpt).to(device)
     optimizer = create_adamw_optimizer(model, lr)
     # creating scheduler will overwrite the learning rate in optimizer
     # so do it first, then reload the optimizer learning rate from checkpoint
-    lr_scheduler = create_lr_scheduler(optimizer, total_steps, lr)
+    lr_scheduler = create_lr_scheduler(optimizer, lr)
     optimizer.load_state_dict(ckpt['optimizer'])
     lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
 
@@ -115,31 +117,30 @@ def load_checkpoint(model_ckpt, device, total_steps, lr) -> tuple[LanguageModel,
     if "mps" in ckpt:
         torch.mps.set_rng_state(ckpt["mps"].cpu())
 
-    print(f"Loaded checkpoint: {model_ckpt}")
-    return model, optimizer, lr_scheduler
+    completed_steps = ckpt['completed-steps']
 
-def train_web_model(steps, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
+    print(f"Loaded checkpoint: {model_ckpt}")
+    return model, optimizer, lr_scheduler, completed_steps
+
+def train_web_model(max_steps, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
                     max_sequence, train_ids, val_input, val_target, device):
-    # dynamic learning rate
-    train_batch = 8
-    accumulation_steps = 4
+    accumulate_batch = 4      # we accumulate 4 forward steps & gradients before running optimizer backward
+    train_batch = 8           # B, batch size of input training tensor
 
     # train the actual models
-    for step in range(steps):
+    for step in range(max_steps):
         if step % 100 == 0:
             loss = validate(model, val_input, val_target)
             print(f"step: {step}, val loss: {loss.item()}")
 
         # accumulate multiple forward runs, then run gradient descent once
         train_data_batch = []
-        for _ in range(accumulation_steps):
+        for _ in range(accumulate_batch):
             train_data_batch.append(build_input_and_target(train_ids, train_batch, max_sequence, device))
         model.train_batch(optimizer, train_data_batch)
         lr_scheduler.step()
 
-def train_job(device, load, val_only):
-    total_steps = 10000
-    lr = 1e-3
+def train_job(steps, lr, device, load, skip_training, model_ckpt_path = None):
 
     random.seed(42)
     torch.manual_seed(42)
@@ -149,7 +150,8 @@ def train_job(device, load, val_only):
     file = path + "/" + "tokenizer.json"
     tokenizer = Tokenizer.from_file(file)
 
-    model_ckpt = path + "/" + "model.web.ckpt"
+    if model_ckpt_path == None:
+        model_ckpt_path = "checkpoints" + "/" + "model.web.ckpt"
     max_sequence = 64
 
     # get tokenized val dataset
@@ -164,28 +166,29 @@ def train_job(device, load, val_only):
     train_ids = np.load(train_file)
 
     if load:
-        model, optimizer, lr_scheduler = load_checkpoint(model_ckpt, device, total_steps, lr)
+        model, optimizer, lr_scheduler, completed_steps = load_checkpoint(model_ckpt_path, device, lr)
     else:
         model = create_model(tokenizer.get_vocab_size(), max_sequence, device)
         optimizer = create_adamw_optimizer(model, lr)
-        lr_scheduler = create_lr_scheduler(optimizer, total_steps, lr)
+        lr_scheduler = create_lr_scheduler(optimizer, lr)
+        completed_steps = 0
 
-    # train and save the initial model
-    if not val_only:
-        steps = 500
+    if not skip_training:
+        # train and save the initial model
         train_web_model(steps, model, optimizer, lr_scheduler, max_sequence, train_ids, val_input, val_target, device)
-        save_checkpoint(model_ckpt, model, optimizer, lr_scheduler)
+        completed_steps += steps
+        save_checkpoint(model_ckpt_path, model, optimizer, lr_scheduler, completed_steps)
 
     # validate model
     loss = validate(model, val_input, val_target)
     print(f"Final loss: {loss.item()}")
 
-    return model, tokenizer, device
+    return model, tokenizer
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
-    parser.add_argument("--val-only", action = "store_true", help = "skip training, just validation")
+    parser.add_argument("--gen-only", action = "store_true", help = "skip training, just generation")
     args = parser.parse_args()
 
     if torch.cuda.is_available():
@@ -195,7 +198,10 @@ if __name__ == '__main__':
     else:
         device = torch.device("cpu")
 
-    model, tokenizer, device = train_job(device, args.load, args.val_only)
+    steps = 500
+    lr = 1e-3
+    load = args.load or args.gen_only
+    model, tokenizer = train_job(steps, lr, device, load, skip_training = args.gen_only)
 
     # generate some stuff from this model
     prompt = "Baby squirrel is"
