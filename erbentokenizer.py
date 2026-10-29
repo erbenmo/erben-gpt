@@ -1,21 +1,21 @@
-import os
+import hashlib
 import heapq
+import json
+import os
 import pickle
+import random
 from itertools import pairwise
 from pathlib import Path
-import json
-import hashlib
 
+import numpy as np
+import tokenizers.decoders
 import torch
 from datasets import Dataset, load_dataset
-from torch import Tensor
-import random
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
-from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import ByteLevel
-import tokenizers.decoders
-import numpy as np
+from tokenizers.trainers import BpeTrainer
+from torch import Tensor
 
 SEP = "[SEP]"
 

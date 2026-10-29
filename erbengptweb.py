@@ -5,8 +5,6 @@ from statistics import mean
 
 import numpy as np
 import torch
-from erbengpt import LanguageModel
-from erbentokenizer import SEP, build_input_and_target
 from tokenizers import Tokenizer
 from torch.optim.adamw import AdamW
 from torch.optim.lr_scheduler import (
@@ -15,6 +13,9 @@ from torch.optim.lr_scheduler import (
     LRScheduler,
     SequentialLR,
 )
+
+from erbengpt import LanguageModel
+from erbentokenizer import SEP, build_input_and_target
 
 
 class Metrics:

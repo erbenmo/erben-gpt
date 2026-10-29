@@ -1,15 +1,15 @@
 import argparse
 import random
 import urllib.request
+from itertools import batched
 from pathlib import Path
 
 import torch
+from torch.nn.utils.rnn import pad_sequence
 from torch.optim.adam import Adam
 
-from erbentokenizer import CharacterTokenizer
 from erbengpt import LanguageModel
-from itertools import batched
-from torch.nn.utils.rnn import pad_sequence
+from erbentokenizer import CharacterTokenizer
 
 
 # download dataset

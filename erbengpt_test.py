@@ -7,8 +7,18 @@ import torch.nn.functional as F
 from torch.optim.adam import Adam
 
 from erbengpt import LanguageModel, causal_attention_multi_head
-from erbengptname import download_dataset, split_dataset, train_naming, validate_all, prepare_batch, generate, save, load
+from erbengptname import (
+    download_dataset,
+    generate,
+    load,
+    prepare_batch,
+    save,
+    split_dataset,
+    train_naming,
+    validate_all,
+)
 from erbentokenizer import CharacterTokenizer
+
 
 @pytest.fixture
 def dataset():

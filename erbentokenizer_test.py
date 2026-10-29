@@ -1,9 +1,17 @@
 import random
+
 import numpy as np
 import pytest
 import torch
 
-from erbentokenizer import BPETokenizer, download_documents, split_documents, train_bpe_tokenizer, tokenize_and_save_documents
+from erbentokenizer import (
+    BPETokenizer,
+    download_documents,
+    split_documents,
+    tokenize_and_save_documents,
+    train_bpe_tokenizer,
+)
+
 
 @pytest.fixture
 def bpe():
