@@ -1,8 +1,9 @@
 import math
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
+
 
 def causal_attention_multi_head(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
     # q, k, v: (B, HC, N, HS)
@@ -179,10 +180,12 @@ class LanguageModel(nn.Module):
         self.train()
         optimizer.zero_grad()
 
+        losses = []
         # forward run + accumulate gradient
         for (input, target) in train_data_batch:
             loss = self._generate_loss(input, target)
             loss.backward()
+            losses.append(loss.item())
 
         # now average the accumulated gradient
         batch_size = len(train_data_batch)
@@ -194,6 +197,8 @@ class LanguageModel(nn.Module):
         # clip gradients
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         optimizer.step()
+
+        return losses
 
     def train_step(self, optimizer, input, target) -> torch.Tensor:
         # enter train mode

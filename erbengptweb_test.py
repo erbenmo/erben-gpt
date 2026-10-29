@@ -22,11 +22,12 @@ def test_checkpoint_resume_correctness(tmp_path):
 
 
     # load both models checkpoints
-    model1, optimizer1, lr_scheduler1, completed_steps1 = load_checkpoint(ckpt1, device, lr)
-    model2, optimizer2, lr_scheduler2, completed_steps2 = load_checkpoint(ckpt2, device, lr)
+    model1, optimizer1, lr_scheduler1, completed_steps1, processed_tokens1 = load_checkpoint(ckpt1, device, lr)
+    model2, optimizer2, lr_scheduler2, completed_steps2, processed_tokens2 = load_checkpoint(ckpt2, device, lr)
 
     # assert the 2 models have the same weight
     torch.testing.assert_close(model1.state_dict(), model2.state_dict(), rtol=0, atol=0)
     torch.testing.assert_close(optimizer1.state_dict(), optimizer2.state_dict(), rtol=0, atol=0)
     torch.testing.assert_close(lr_scheduler1.state_dict(), lr_scheduler2.state_dict(), rtol=0, atol=0)
     assert completed_steps1 == completed_steps2 == total_steps
+    assert processed_tokens1 == processed_tokens2

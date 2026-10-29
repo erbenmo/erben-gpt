@@ -1,16 +1,48 @@
 import argparse
 import random
+import time
+from statistics import mean
 
-import torch
-from torch.optim.adamw import AdamW
-
-from tokenizers import Tokenizer
 import numpy as np
-
+import torch
 from erbengpt import LanguageModel
-from erbentokenizer import build_input_and_target, SEP
+from erbentokenizer import SEP, build_input_and_target
+from tokenizers import Tokenizer
+from torch.optim.adamw import AdamW
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR,
+    LinearLR,
+    LRScheduler,
+    SequentialLR,
+)
 
-from torch.optim.lr_scheduler import LRScheduler, CosineAnnealingLR, LinearLR, SequentialLR
+
+class Metrics:
+    def __init__(self, completed_updates, last_lr, processed_tokens):
+        self.completed_updates = completed_updates # number of times we complete entire forward + backward training
+        self.last_lr = last_lr
+        self.processed_tokens = processed_tokens
+        self.training_loss = []
+        self.validation_loss = 0
+
+    def update(self, train_data_batch, losses, last_lr):
+        self.completed_updates += 1
+        self.last_lr = last_lr
+        self.training_loss.extend(losses)
+        for (input, _) in train_data_batch:
+            B, N = input.shape
+            self.processed_tokens += B * N
+
+    def log_event(self, elapsed_ms):
+        mean_loss = mean(self.training_loss) if len(self.training_loss) > 0 else float("nan")
+        print(
+            f"completed_updates: {self.completed_updates}, "
+            f"training_loss: {mean_loss}, "
+            f"validation_loss: {self.validation_loss}, "
+            f"learning_rate: {self.last_lr}, "
+            f"processed tokens: {self.processed_tokens}, "
+            f"elapsed time(ms): {elapsed_ms}"
+        )
 
 @torch.no_grad()
 def validate(model: LanguageModel, input, target):
@@ -78,7 +110,7 @@ def create_lr_scheduler(optimizer: AdamW, peak_lr, total_iters = 10000) -> LRSch
     return SequentialLR(optimizer, [linear_lr, cosine_lr], milestones)
 
 def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
-                    lr_scheduler: LRScheduler, completed_steps: int):
+                    lr_scheduler: LRScheduler, completed_steps: int, processed_tokens: int):
     ckpt = model.save()
     ckpt.update({
         'optimizer': optimizer.state_dict(),
@@ -93,11 +125,12 @@ def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
         ckpt['mps'] = torch.mps.get_rng_state()
 
     ckpt['completed-steps'] = completed_steps
+    ckpt['processed_tokens'] = processed_tokens
 
     torch.save(ckpt, ckpt_file)
     print(f"Saved checkpoint: {ckpt_file}")
 
-def load_checkpoint(model_ckpt, device, lr) -> tuple[LanguageModel, AdamW, LRScheduler, int]:
+def load_checkpoint(model_ckpt, device, lr) -> tuple[LanguageModel, AdamW, LRScheduler, int, int]:
     ckpt = torch.load(model_ckpt, 'cpu', weights_only = False)
     model = LanguageModel.load(ckpt).to(device)
     optimizer = create_adamw_optimizer(model, lr)
@@ -118,27 +151,37 @@ def load_checkpoint(model_ckpt, device, lr) -> tuple[LanguageModel, AdamW, LRSch
         torch.mps.set_rng_state(ckpt["mps"].cpu())
 
     completed_steps = ckpt['completed-steps']
+    processed_tokens = ckpt['processed_tokens']
 
     print(f"Loaded checkpoint: {model_ckpt}")
-    return model, optimizer, lr_scheduler, completed_steps
+    return model, optimizer, lr_scheduler, completed_steps, processed_tokens
+
+def print_metrics(metrics: Metrics, start, new_time, val_loss):
+    metrics.validation_loss = val_loss.item()
+    metrics.log_event((new_time - start) * 1000)
+    metrics.training_loss = []
 
 def train_web_model(max_steps, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
-                    max_sequence, train_ids, val_input, val_target, device):
+                    max_sequence, train_ids, val_input, val_target, device, metrics: Metrics):
     accumulate_batch = 4      # we accumulate 4 forward steps & gradients before running optimizer backward
     train_batch = 8           # B, batch size of input training tensor
 
     # train the actual models
+    start = time.perf_counter()
     for step in range(max_steps):
-        if step % 100 == 0:
-            loss = validate(model, val_input, val_target)
-            print(f"step: {step}, val loss: {loss.item()}")
-
         # accumulate multiple forward runs, then run gradient descent once
         train_data_batch = []
         for _ in range(accumulate_batch):
             train_data_batch.append(build_input_and_target(train_ids, train_batch, max_sequence, device))
-        model.train_batch(optimizer, train_data_batch)
+        losses = model.train_batch(optimizer, train_data_batch)
+        last_lr = lr_scheduler.get_last_lr()
         lr_scheduler.step()
+        metrics.update(train_data_batch, losses, last_lr)
+
+        if metrics.completed_updates % 100 == 0 or step == max_steps - 1:
+            val_loss = validate(model, val_input, val_target)
+            print_metrics(metrics, start, time.perf_counter(), val_loss)
+
 
 def train_job(steps, lr, device, load, skip_training, model_ckpt_path = None):
 
@@ -166,22 +209,19 @@ def train_job(steps, lr, device, load, skip_training, model_ckpt_path = None):
     train_ids = np.load(train_file)
 
     if load:
-        model, optimizer, lr_scheduler, completed_steps = load_checkpoint(model_ckpt_path, device, lr)
+        model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(model_ckpt_path, device, lr)
+        metrics = Metrics(completed_steps, lr_scheduler.get_last_lr(), processed_tokens)
     else:
         model = create_model(tokenizer.get_vocab_size(), max_sequence, device)
         optimizer = create_adamw_optimizer(model, lr)
         lr_scheduler = create_lr_scheduler(optimizer, lr)
-        completed_steps = 0
+        metrics = Metrics(0, lr_scheduler.get_last_lr(), 0)
 
     if not skip_training:
         # train and save the initial model
-        train_web_model(steps, model, optimizer, lr_scheduler, max_sequence, train_ids, val_input, val_target, device)
-        completed_steps += steps
-        save_checkpoint(model_ckpt_path, model, optimizer, lr_scheduler, completed_steps)
-
-    # validate model
-    loss = validate(model, val_input, val_target)
-    print(f"Final loss: {loss.item()}")
+        train_web_model(steps, model, optimizer, lr_scheduler, max_sequence, train_ids, val_input, val_target,
+                        device, metrics)
+        save_checkpoint(model_ckpt_path, model, optimizer, lr_scheduler, metrics.completed_updates, metrics.processed_tokens)
 
     return model, tokenizer
 
