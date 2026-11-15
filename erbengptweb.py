@@ -46,9 +46,9 @@ class Metrics:
         )
 
 @torch.no_grad()
-def validate(model: LanguageModel, input, target):
+def validate(model: LanguageModel, input, target, use_bf16):
     model.eval()
-    return model._generate_loss(input, target)
+    return model._generate_loss(input, target, use_bf16)
 
 @torch.no_grad()
 def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, device, max_generation = 64):
@@ -163,7 +163,8 @@ def print_metrics(metrics: Metrics, start, new_time, val_loss):
     metrics.training_loss = []
 
 def train_web_model(max_steps, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
-                    max_sequence, train_ids, val_input, val_target, device, metrics: Metrics):
+                    max_sequence, train_ids, val_input, val_target, device, metrics: Metrics,
+                    use_bf16):
     accumulate_batch = 4      # we accumulate 4 forward steps & gradients before running optimizer backward
     train_batch = 8           # B, batch size of input training tensor
 
@@ -174,17 +175,17 @@ def train_web_model(max_steps, model: LanguageModel, optimizer: AdamW, lr_schedu
         train_data_batch = []
         for _ in range(accumulate_batch):
             train_data_batch.append(build_input_and_target(train_ids, train_batch, max_sequence, device))
-        losses = model.train_batch(optimizer, train_data_batch)
+        losses = model.train_batch(optimizer, train_data_batch, use_bf16)
         last_lr = lr_scheduler.get_last_lr()
         lr_scheduler.step()
         metrics.update(train_data_batch, losses, last_lr)
 
         if metrics.completed_updates % 100 == 0 or step == max_steps - 1:
-            val_loss = validate(model, val_input, val_target)
+            val_loss = validate(model, val_input, val_target, use_bf16)
             print_metrics(metrics, start, time.perf_counter(), val_loss)
 
 
-def train_job(steps, lr, device, load, skip_training, model_ckpt_path = None):
+def train_job(steps, lr, device, load, skip_training, use_bf16, model_ckpt_path = None):
 
     random.seed(42)
     torch.manual_seed(42)
@@ -221,7 +222,7 @@ def train_job(steps, lr, device, load, skip_training, model_ckpt_path = None):
     if not skip_training:
         # train and save the initial model
         train_web_model(steps, model, optimizer, lr_scheduler, max_sequence, train_ids, val_input, val_target,
-                        device, metrics)
+                        device, metrics, use_bf16)
         save_checkpoint(model_ckpt_path, model, optimizer, lr_scheduler, metrics.completed_updates, metrics.processed_tokens)
 
     return model, tokenizer
@@ -230,6 +231,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
     parser.add_argument("--gen-only", action = "store_true", help = "skip training, just generation")
+    parser.add_argument("--use-bf16", action = "store_true", help = "use bf16 for forward pass")
+
     args = parser.parse_args()
 
     if torch.cuda.is_available():
@@ -242,7 +245,7 @@ if __name__ == '__main__':
     steps = 500
     lr = 1e-3
     load = args.load or args.gen_only
-    model, tokenizer = train_job(steps, lr, device, load, skip_training = args.gen_only)
+    model, tokenizer = train_job(steps, lr, device, load, args.gen_only, args.use_bf16)
 
     # generate some stuff from this model
     prompt = "Baby squirrel is"

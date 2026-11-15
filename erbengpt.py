@@ -167,23 +167,25 @@ class LanguageModel(nn.Module):
         model.load_state_dict(ckpt['weight'])
         return model
 
-    def _generate_loss(self, input: torch.Tensor, target: torch.Tensor):
-        # forward pass - train on this input
-        logits = self(input) # shape: [batch, N, vocab_size]
-        # cross entropy expects shape [batch, vocab_size, N]
-        logits = logits.transpose(1, 2)
-        loss = F.cross_entropy(logits, target, ignore_index = -100)
-        return loss
+    def _generate_loss(self, input: torch.Tensor, target: torch.Tensor,
+                       use_bf16 = False):
+        with torch.autocast(input.device.type, dtype=torch.bfloat16, enabled=use_bf16):
+            # forward pass - train on this input
+            logits = self(input) # shape: [batch, N, vocab_size]
+            # cross entropy expects shape [batch, vocab_size, N]
+            logits = logits.transpose(1, 2)
+            loss = F.cross_entropy(logits, target, ignore_index = -100)
+            return loss
 
     # run multiple forward run and accumulate gradients, then run gradient descent once
-    def train_batch(self, optimizer, train_data_batch):
+    def train_batch(self, optimizer, train_data_batch, use_bf16):
         self.train()
         optimizer.zero_grad()
 
         losses = []
         # forward run + accumulate gradient
         for (input, target) in train_data_batch:
-            loss = self._generate_loss(input, target)
+            loss = self._generate_loss(input, target, use_bf16)
             loss.backward()
             losses.append(loss.item())
 
