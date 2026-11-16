@@ -8,7 +8,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim.adam import Adam
 
-from erbengpt import LanguageModel
+from erbengpt import LanguageModel, ModelConfig
 from erbentokenizer import CharacterTokenizer
 
 
@@ -105,7 +105,7 @@ def generate(model: LanguageModel, tokenizer: CharacterTokenizer, greedy = False
             if char == tokenizer.SEP:
                 break
             sample += char
-            if len(sample) >= model.max_sequence - 1:
+            if len(sample) >= model.config.max_sequence - 1:
                 break
         samples.append(sample)
         print(sample)
@@ -144,14 +144,16 @@ if __name__ == '__main__':
 
     if not args.load:
         dataset = download_dataset()
-        chars = sorted(list(set("".join(dataset))))
+        chars = sorted(set("".join(dataset)))
         tokenizer = CharacterTokenizer(chars)
         max_sequence = max(len(name) for name in dataset) + 1
         train_data, val_data = split_dataset(dataset)
 
         for (feature, layer) in feature_layers:
             print(f"Feature: {feature}, Layer: {layer}")
-            model = LanguageModel(tokenizer.vocab_size, max_sequence, feature_count = feature, head_count = 4, layer_count = layer, attention_mode = args.attention_mode)
+            config = ModelConfig(tokenizer.vocab_size, max_sequence, feature_count = feature, head_count = 4, layer_count = layer, 
+                                 attention_mode = args.attention_mode)
+            model = LanguageModel(config)
             optimizer = Adam(model.parameters(), lr=1e-3)
 
             train_naming(model, optimizer, tokenizer, train_data, val_data, steps)

@@ -14,7 +14,7 @@ from torch.optim.lr_scheduler import (
     SequentialLR,
 )
 
-from erbengpt import LanguageModel
+from erbengpt import LanguageModel, ModelConfig
 from erbentokenizer import SEP, build_input_and_target
 
 
@@ -60,7 +60,7 @@ def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, device, ma
     sep_id = tokenizer.encode(SEP).ids[0]
     for _ in range(max_generation):
         # bound the context window size, and create a batch of 1
-        input = torch.tensor(encoded[-model.max_sequence:], device = device).unsqueeze(0) 
+        input = torch.tensor(encoded[-model.config.max_sequence:], device = device).unsqueeze(0) 
 
         # (B, N, vocab_size)
         logits = model(input)
@@ -75,15 +75,13 @@ def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, device, ma
     decoded = tokenizer.decode(encoded)
     return decoded
 
-def create_model(vocab_size, max_sequence, device) -> LanguageModel:
+def create_model(tokenizer, max_sequence, feature_count, head_count, layer_count, device):
     attention_mode="sdpa"
-    feature_count = 64
-    head_count = 4
-    layer_count = 2
-    model = LanguageModel(vocab_size, max_sequence, feature_count, head_count, layer_count, attention_mode)
+    config = ModelConfig(tokenizer.get_vocab_size(), max_sequence, feature_count, head_count, layer_count, attention_mode)
+    model = LanguageModel(config)
     model = model.to(device)
     return model
-
+    
 def create_adamw_optimizer(model, lr) -> AdamW:
     # optimizer: AdamW - with weight decay for weight-only parameters
     matrices = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
@@ -163,8 +161,7 @@ def print_metrics(metrics: Metrics, start, new_time, val_loss):
     metrics.training_loss = []
 
 def train_web_model(max_steps, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
-                    max_sequence, train_ids, val_input, val_target, device, metrics: Metrics,
-                    use_bf16):
+                    train_ids, val_input, val_target, device, metrics: Metrics, use_bf16):
     accumulate_batch = 4      # we accumulate 4 forward steps & gradients before running optimizer backward
     train_batch = 8           # B, batch size of input training tensor
 
@@ -174,7 +171,7 @@ def train_web_model(max_steps, model: LanguageModel, optimizer: AdamW, lr_schedu
         # accumulate multiple forward runs, then run gradient descent once
         train_data_batch = []
         for _ in range(accumulate_batch):
-            train_data_batch.append(build_input_and_target(train_ids, train_batch, max_sequence, device))
+            train_data_batch.append(build_input_and_target(train_ids, train_batch, model.config.max_sequence, device))
         losses = model.train_batch(optimizer, train_data_batch, use_bf16)
         last_lr = lr_scheduler.get_last_lr()
         lr_scheduler.step()
@@ -185,7 +182,8 @@ def train_web_model(max_steps, model: LanguageModel, optimizer: AdamW, lr_schedu
             print_metrics(metrics, start, time.perf_counter(), val_loss)
 
 
-def train_job(steps, lr, device, load, skip_training, use_bf16, model_ckpt_path = None):
+def train_job(steps, lr, device, max_sequence, feature_count, head_count, layer_count,
+              load, skip_training, use_bf16, model_ckpt_path = None):
 
     random.seed(42)
     torch.manual_seed(42)
@@ -197,14 +195,6 @@ def train_job(steps, lr, device, load, skip_training, use_bf16, model_ckpt_path 
 
     if model_ckpt_path == None:
         model_ckpt_path = "checkpoints" + "/" + "model.web.ckpt"
-    max_sequence = 64
-
-    # get tokenized val dataset
-    val_file = path + "/" + "val.tokenized.npy"
-    val_ids = np.load(val_file)
-    val_batch = 64
-    val_input, val_target = build_input_and_target(val_ids, val_batch, max_sequence, device,
-                                                   random.Random(42))
 
     # get the tokenized train dataset
     train_file = path + "/" + "train.tokenized.npy"
@@ -214,14 +204,25 @@ def train_job(steps, lr, device, load, skip_training, use_bf16, model_ckpt_path 
         model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(model_ckpt_path, device, lr)
         metrics = Metrics(completed_steps, lr_scheduler.get_last_lr(), processed_tokens)
     else:
-        model = create_model(tokenizer.get_vocab_size(), max_sequence, device)
+        model = create_model(tokenizer, max_sequence, feature_count, head_count, layer_count, device)
         optimizer = create_adamw_optimizer(model, lr)
         lr_scheduler = create_lr_scheduler(optimizer, lr)
         metrics = Metrics(0, lr_scheduler.get_last_lr(), 0)
 
+    # print model stats
+    print(f"Model Config: {model.config.save()}")
+    print(f"Model total parameter count: {model.get_total_parameter()}")
+
+    # get tokenized val dataset
+    val_file = path + "/" + "val.tokenized.npy"
+    val_ids = np.load(val_file)
+    val_batch = 64
+    val_input, val_target = build_input_and_target(val_ids, val_batch, model.config.max_sequence, device,
+                                                   random.Random(42))
+
     if not skip_training:
         # train and save the initial model
-        train_web_model(steps, model, optimizer, lr_scheduler, max_sequence, train_ids, val_input, val_target,
+        train_web_model(steps, model, optimizer, lr_scheduler, train_ids, val_input, val_target,
                         device, metrics, use_bf16)
         save_checkpoint(model_ckpt_path, model, optimizer, lr_scheduler, metrics.completed_updates, metrics.processed_tokens)
 
@@ -232,6 +233,11 @@ if __name__ == '__main__':
     parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
     parser.add_argument("--gen-only", action = "store_true", help = "skip training, just generation")
     parser.add_argument("--use-bf16", action = "store_true", help = "use bf16 for forward pass")
+
+    parser.add_argument("--max-sequence", type = int, default = 64, help = "max token length in a training row")
+    parser.add_argument("--feature-count", type = int, default = 64, help = "number of feature for each token")
+    parser.add_argument("--head-count", type = int, default = 4, help = "number of attention head")
+    parser.add_argument("--layer-count", type = int, default = 2, help = "number of transformer block in LLM")
 
     args = parser.parse_args()
 
@@ -245,7 +251,9 @@ if __name__ == '__main__':
     steps = 500
     lr = 1e-3
     load = args.load or args.gen_only
-    model, tokenizer = train_job(steps, lr, device, load, args.gen_only, args.use_bf16)
+
+    model, tokenizer = train_job(steps, lr, device, args.max_sequence, args.feature_count, args.head_count,
+                                 args.layer_count, load, args.gen_only, args.use_bf16)
 
     # generate some stuff from this model
     prompt = "Baby squirrel is"

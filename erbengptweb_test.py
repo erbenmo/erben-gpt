@@ -10,7 +10,12 @@ def test_checkpoint_resume_correctness(tmp_path):
 
     # first train a model
     ckpt1 = tmp_path / "ckpt1"
-    train_job(total_steps, lr, device, load=False, skip_training=False, use_bf16=False, model_ckpt_path=ckpt1)
+    max_sequence = 64
+    feature_count = 64
+    head_count = 4
+    layer_count = 2
+    train_job(total_steps, lr, device, max_sequence, feature_count, head_count, layer_count, 
+              load=False, skip_training=False, use_bf16=False, model_ckpt_path=ckpt1)
 
     # then train model 2 using repeated save & load
     count = 10
@@ -18,8 +23,8 @@ def test_checkpoint_resume_correctness(tmp_path):
     ckpt2 = tmp_path / "ckpt2"
     for i in range(count):
         load = i > 0
-        train_job(steps, lr, device, load=load, skip_training=False, use_bf16=False, model_ckpt_path=ckpt2)
-
+        train_job(steps, lr, device, max_sequence, feature_count, head_count, layer_count,
+                  load=load, skip_training=False, use_bf16=False, model_ckpt_path=ckpt2)
 
     # load both models checkpoints
     model1, optimizer1, lr_scheduler1, completed_steps1, processed_tokens1 = load_checkpoint(ckpt1, device, lr)

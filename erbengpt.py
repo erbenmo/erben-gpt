@@ -95,11 +95,9 @@ class Transformer(nn.Module):
         features = features + mlp
         return features
 
-# train a language model. token id is converted into F features and we use a linear layer to predict next token
-class LanguageModel(nn.Module):
-    def __init__(self, vocab_size, max_sequence, feature_count = 16, head_count = 4, layer_count = 2, attention_mode = "manual"):
-        super().__init__()
-
+class ModelConfig:
+    def __init__(self, vocab_size, max_sequence, feature_count = 16, head_count = 4, layer_count = 2,
+                 attention_mode = "manual"):
         self.vocab_size = vocab_size
         self.max_sequence = max_sequence
         self.feature_count = feature_count
@@ -107,25 +105,50 @@ class LanguageModel(nn.Module):
         self.layer_count = layer_count
         self.attention_mode = attention_mode
 
-        if feature_count % head_count > 0:
-            raise ValueError(f"feature count {feature_count} must be multiplier of head_count {head_count}")
+    def save(self) -> dict:
+        ckpt = {'vocab_size' : self.vocab_size,
+                'max_sequence' : self.max_sequence,
+                'feature_count' : self.feature_count,
+                'head_count' : self.head_count,
+                "layer_count" : self.layer_count,
+                "attention_mode" : self.attention_mode}
+        return ckpt
+
+    @staticmethod
+    def load(ckpt):
+        config = ModelConfig(ckpt['vocab_size'],
+                             ckpt['max_sequence'],
+                             ckpt['feature_count'],
+                             ckpt['head_count'],
+                             ckpt['layer_count'],
+                             ckpt['attention_mode'])
+        return config
+
+# train a language model. token id is converted into F features and we use a linear layer to predict next token
+class LanguageModel(nn.Module):
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.config = config
+
+        if config.feature_count % config.head_count > 0:
+            raise ValueError(f"feature count {config.feature_count} must be multiplier of head_count {config.head_count}")
 
         # embedding each token -> features
-        self.token_embeddings = nn.Embedding(self.vocab_size, feature_count)
+        self.token_embeddings = nn.Embedding(config.vocab_size, config.feature_count)
 
         # embed position -> feature
-        self.position_embedding = nn.Embedding(max_sequence, feature_count)
+        self.position_embedding = nn.Embedding(config.max_sequence, config.feature_count)
 
         # transformer: feature -> feature
         self.transformers = nn.ModuleList()
-        for _ in range(layer_count):
-            self.transformers.append(Transformer(feature_count, head_count, attention_mode))
+        for _ in range(config.layer_count):
+            self.transformers.append(Transformer(config.feature_count, config.head_count, config.attention_mode))
 
         # final LayerNorm before feature -> token mapping
-        self.ln_final = nn.LayerNorm(feature_count)
+        self.ln_final = nn.LayerNorm(config.feature_count)
 
         # simple mapping: turn features -> next token prediction
-        self.linear = nn.Linear(feature_count, self.vocab_size)
+        self.linear = nn.Linear(config.feature_count, config.vocab_size)
 
     # tokens.shape = (batch, max_sequence (of this batch))
     def forward(self, tokens: torch.Tensor):
@@ -147,23 +170,14 @@ class LanguageModel(nn.Module):
         return self.linear(features)
 
     def save(self) -> dict:
-        ckpt = {'vocab_size' : self.vocab_size,
-                'weight' : self.state_dict(),
-                'max_sequence' : self.max_sequence,
-                'feature_count' : self.feature_count,
-                'head_count' : self.head_count,
-                "layer_count" : self.layer_count,
-                "attention_mode" : self.attention_mode}
+        ckpt = {'config' : self.config.save(),
+                'weight' : self.state_dict()}
         return ckpt
 
     @staticmethod
     def load(ckpt):
-        model = LanguageModel(ckpt['vocab_size'],
-                              ckpt['max_sequence'],
-                              ckpt['feature_count'],
-                              ckpt['head_count'],
-                              ckpt['layer_count'],
-                              ckpt['attention_mode'])
+        config = ModelConfig.load(ckpt['config'])
+        model = LanguageModel(config)
         model.load_state_dict(ckpt['weight'])
         return model
 
@@ -234,3 +248,6 @@ class LanguageModel(nn.Module):
         probability = torch.softmax(logits, dim = 0)
         # sample 1 token
         return torch.multinomial(probability, num_samples=1)[0]
+
+    def get_total_parameter(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
