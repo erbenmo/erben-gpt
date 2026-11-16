@@ -1,3 +1,4 @@
+import argparse
 import hashlib
 import heapq
 import json
@@ -335,11 +336,15 @@ if __name__ == '__main__':
     seed = 42
     random.seed(seed)
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--document-size", type=int, default=2000, help = "how many documents to tokenize")
+    args = parser.parse_args()
+
     # load dataset
-    D = 2000
-    path = "data-" + str(D)
+    document_size = args.document_size
+    path = "data-" + str(document_size)
     os.makedirs(path, exist_ok=True)
-    documents = download_documents(D)
+    documents = download_documents(document_size)
     random.shuffle(documents)
     train, val, test = split_documents(documents)
     
@@ -361,7 +366,7 @@ if __name__ == '__main__':
     test_ids = get_tokenized_documents(test_file, tokenizer, test)
     print(f"train_ids length: {len(train_ids)}, val_ids length: {len(val_ids)}, test_ids length: {len(test_ids)}")
 
-    build_manifest(tokenizer, file, train, val, test, train_ids, val_ids, test_ids, D, seed, path)
+    build_manifest(tokenizer, file, train, val, test, train_ids, val_ids, test_ids, document_size, seed, path)
 
     # build dataset
     B = 5
