@@ -1,0 +1,21 @@
+{
+  "path": "HuggingFaceFW/fineweb-edu",
+  "name": "sample-10BT",
+  "sample": 3000,
+  "split": [
+    90,
+    5,
+    5
+  ],
+  "split_seed": 42,
+  "train doc size": 2700,
+  "val doc size": 150,
+  "test doc size": 150,
+  "train token size": 3395270,
+  "val token size": 151357,
+  "test token size": 185754,
+  "vocab size": 8192,
+  "SEP": "[SEP]",
+  "SEP id": 0,
+  "tokenizer-sha-256": "3b9f1bc1f059e020d4a53aaefcdbf920d9bccdb3affbab136b7b5c0e6fe8c5d3"
+}
