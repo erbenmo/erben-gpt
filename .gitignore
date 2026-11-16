@@ -2,5 +2,5 @@ input.txt
 __pycache__/
 .venv/
 checkpoints/
-dataset/
+data/raw/
 *.tokenized.npy

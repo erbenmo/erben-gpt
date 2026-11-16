@@ -188,7 +188,7 @@ def train_job(steps, lr, device, max_sequence, feature_count, head_count, layer_
     random.seed(42)
     torch.manual_seed(42)
 
-    path = "data-2000"
+    path = "data/processed/fineweb-2000"
     # get tokenizer
     file = path + "/" + "tokenizer.json"
     tokenizer = Tokenizer.from_file(file)
