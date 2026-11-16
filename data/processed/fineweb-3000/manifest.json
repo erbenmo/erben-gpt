@@ -11,11 +11,11 @@
   "train doc size": 2700,
   "val doc size": 150,
   "test doc size": 150,
-  "train token size": 3395270,
-  "val token size": 151357,
-  "test token size": 185754,
+  "train token size": 3407222,
+  "val token size": 150807,
+  "test token size": 183382,
   "vocab size": 8192,
   "SEP": "[SEP]",
   "SEP id": 0,
-  "tokenizer-sha-256": "3b9f1bc1f059e020d4a53aaefcdbf920d9bccdb3affbab136b7b5c0e6fe8c5d3"
+  "tokenizer-sha-256": "b815d2ce653130e72a5d042491f43ab8962dc8e8048b47368f5c3ef87fe5367b"
 }

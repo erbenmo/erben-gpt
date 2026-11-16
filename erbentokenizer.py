@@ -5,6 +5,7 @@ import json
 import os
 import pickle
 import random
+import shutil
 from itertools import pairwise
 from pathlib import Path
 
@@ -338,18 +339,31 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--document-size", type=int, default=2000, help = "how many documents to tokenize")
+    parser.add_argument("--tokenizer-file", type=str, default=None, help = "copy existing tokenizer from the given path")
+
     args = parser.parse_args()
 
-    # load dataset
     document_size = args.document_size
     path = "data/processed/fineweb-" + str(document_size)
     os.makedirs(path, exist_ok=True)
+    file = path + "/" + "tokenizer.json"
+
+    # check invariants for loading existing tokenizer
+    if args.tokenizer_file:
+        if len(os.listdir(path)) > 0:
+            raise ValueError("Tokenizer folder is not empty. Can not reload")
+        if not Path(args.tokenizer_file).exists():
+            raise ValueError(f"Given tokenizer file doesn't exist: {args.tokenizer_file}")
+
+    # load raw dataset
     documents = download_documents(document_size)
     random.shuffle(documents)
     train, val, test = split_documents(documents)
     
-    # train the tokenizer
-    file = path + "/" + "tokenizer.json"
+    # load/train the tokenizer
+    if args.tokenizer_file:
+        shutil.copy(args.tokenizer_file, file)
+
     if not Path(file).exists():
         tokenizer = train_bpe_tokenizer(train)
         tokenizer.save(file)
