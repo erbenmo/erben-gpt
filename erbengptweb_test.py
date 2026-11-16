@@ -14,7 +14,8 @@ def test_checkpoint_resume_correctness(tmp_path):
     feature_count = 64
     head_count = 4
     layer_count = 2
-    train_job(total_steps, lr, device, max_sequence, feature_count, head_count, layer_count, 
+    path = "data/processed/fineweb-2000"
+    train_job(path, total_steps, total_steps, lr, device, max_sequence, feature_count, head_count, layer_count, 
               load=False, skip_training=False, use_bf16=False, model_ckpt_path=ckpt1)
 
     # then train model 2 using repeated save & load
@@ -23,12 +24,12 @@ def test_checkpoint_resume_correctness(tmp_path):
     ckpt2 = tmp_path / "ckpt2"
     for i in range(count):
         load = i > 0
-        train_job(steps, lr, device, max_sequence, feature_count, head_count, layer_count,
+        train_job(path, total_steps, steps, lr, device, max_sequence, feature_count, head_count, layer_count,
                   load=load, skip_training=False, use_bf16=False, model_ckpt_path=ckpt2)
 
     # load both models checkpoints
-    model1, optimizer1, lr_scheduler1, completed_steps1, processed_tokens1 = load_checkpoint(ckpt1, device, lr)
-    model2, optimizer2, lr_scheduler2, completed_steps2, processed_tokens2 = load_checkpoint(ckpt2, device, lr)
+    model1, optimizer1, lr_scheduler1, completed_steps1, processed_tokens1 = load_checkpoint(ckpt1, device, lr, total_steps)
+    model2, optimizer2, lr_scheduler2, completed_steps2, processed_tokens2 = load_checkpoint(ckpt2, device, lr, total_steps)
 
     # assert the 2 models have the same weight
     torch.testing.assert_close(model1.state_dict(), model2.state_dict(), rtol=0, atol=0)

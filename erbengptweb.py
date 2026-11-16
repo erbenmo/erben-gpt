@@ -93,12 +93,12 @@ def create_adamw_optimizer(model, lr) -> AdamW:
 
     return optimizer
 
-def create_lr_scheduler(optimizer: AdamW, peak_lr, total_iters = 10000) -> LRScheduler:
+def create_lr_scheduler(optimizer: AdamW, peak_lr, total_iters) -> LRScheduler:
     # warm up: linear scale up from min to peak
     start_factor = 0.1
     min_lr = start_factor * peak_lr
     end_factor = 1.0
-    warmup_iters = 20
+    warmup_iters = min(200, total_iters - 1)
     linear_lr = LinearLR(optimizer, start_factor, end_factor, warmup_iters)
 
     # cosine decay from peak to min
@@ -129,13 +129,13 @@ def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
     torch.save(ckpt, ckpt_file)
     print(f"Saved checkpoint: {ckpt_file}")
 
-def load_checkpoint(model_ckpt, device, lr) -> tuple[LanguageModel, AdamW, LRScheduler, int, int]:
+def load_checkpoint(model_ckpt, device, lr, total_iters) -> tuple[LanguageModel, AdamW, LRScheduler, int, int]:
     ckpt = torch.load(model_ckpt, 'cpu', weights_only = False)
     model = LanguageModel.load(ckpt).to(device)
     optimizer = create_adamw_optimizer(model, lr)
     # creating scheduler will overwrite the learning rate in optimizer
     # so do it first, then reload the optimizer learning rate from checkpoint
-    lr_scheduler = create_lr_scheduler(optimizer, lr)
+    lr_scheduler = create_lr_scheduler(optimizer, lr, total_iters)
     optimizer.load_state_dict(ckpt['optimizer'])
     lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
 
@@ -182,13 +182,12 @@ def train_web_model(max_steps, model: LanguageModel, optimizer: AdamW, lr_schedu
             print_metrics(metrics, start, time.perf_counter(), val_loss)
 
 
-def train_job(steps, lr, device, max_sequence, feature_count, head_count, layer_count,
+def train_job(path, total_steps, current_steps, lr, device, max_sequence, feature_count, head_count, layer_count,
               load, skip_training, use_bf16, model_ckpt_path = None):
 
     random.seed(42)
     torch.manual_seed(42)
 
-    path = "data/processed/fineweb-2000"
     # get tokenizer
     file = path + "/" + "tokenizer.json"
     tokenizer = Tokenizer.from_file(file)
@@ -201,12 +200,12 @@ def train_job(steps, lr, device, max_sequence, feature_count, head_count, layer_
     train_ids = np.load(train_file)
 
     if load:
-        model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(model_ckpt_path, device, lr)
+        model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(model_ckpt_path, device, lr, total_steps)
         metrics = Metrics(completed_steps, lr_scheduler.get_last_lr(), processed_tokens)
     else:
         model = create_model(tokenizer, max_sequence, feature_count, head_count, layer_count, device)
         optimizer = create_adamw_optimizer(model, lr)
-        lr_scheduler = create_lr_scheduler(optimizer, lr)
+        lr_scheduler = create_lr_scheduler(optimizer, lr, total_steps)
         metrics = Metrics(0, lr_scheduler.get_last_lr(), 0)
 
     # print model stats
@@ -222,7 +221,7 @@ def train_job(steps, lr, device, max_sequence, feature_count, head_count, layer_
 
     if not skip_training:
         # train and save the initial model
-        train_web_model(steps, model, optimizer, lr_scheduler, train_ids, val_input, val_target,
+        train_web_model(current_steps, model, optimizer, lr_scheduler, train_ids, val_input, val_target,
                         device, metrics, use_bf16)
         save_checkpoint(model_ckpt_path, model, optimizer, lr_scheduler, metrics.completed_updates, metrics.processed_tokens)
 
@@ -230,7 +229,11 @@ def train_job(steps, lr, device, max_sequence, feature_count, head_count, layer_
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--load", action = "store_true", help = "load checkpoint instead of training")
+    parser.add_argument("--data-path", type= str, default = "data/processed/fineweb-2000", help = "path to tokenized training data")
+    parser.add_argument("--total-steps", type = int, default = 500, help = "total steps we aim for across all checkpoints")
+    parser.add_argument("--current-steps", type = int, default = 500, help = "number of training steps for this job")
+
+    parser.add_argument("--load", action = "store_true", help = "load from checkpoint instead of starting from scratch")
     parser.add_argument("--gen-only", action = "store_true", help = "skip training, just generation")
     parser.add_argument("--use-bf16", action = "store_true", help = "use bf16 for forward pass")
 
@@ -248,12 +251,11 @@ if __name__ == '__main__':
     else:
         device = torch.device("cpu")
 
-    steps = 500
     lr = 1e-3
     load = args.load or args.gen_only
 
-    model, tokenizer = train_job(steps, lr, device, args.max_sequence, args.feature_count, args.head_count,
-                                 args.layer_count, load, args.gen_only, args.use_bf16)
+    model, tokenizer = train_job(args.data_path, args.total_steps, args.current_steps, lr, device, args.max_sequence, args.feature_count, 
+                                 args.head_count, args.layer_count, load, args.gen_only, args.use_bf16)
 
     # generate some stuff from this model
     prompt = "Baby squirrel is"
