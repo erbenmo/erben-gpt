@@ -19,6 +19,14 @@ from erbengpt import LanguageModel, ModelConfig
 from erbentokenizer import SEP, build_input_and_target
 
 
+class TrainingConfig:
+    def __init__(self, total_steps, job_steps, descent_batch = 4, training_batch_size = 8, use_bf16 = False):
+        self.total_steps = total_steps
+        self.job_steps = job_steps
+        self.descent_batch = descent_batch               # how many training batch to accumulate before running gradient descent
+        self.training_batch_size = training_batch_size   # size of training batch, the "B"
+        self.use_bf16 = use_bf16                         # use bf16 for computation (weight is still stored as fp32)
+
 class Metrics:
     def __init__(self, completed_updates, last_lr, processed_tokens):
         self.completed_updates = completed_updates # number of times we complete entire forward + backward training
@@ -163,33 +171,31 @@ def print_metrics(metrics: Metrics, start, new_time, val_loss):
     metrics.log_event((new_time - start) * 1000)
     metrics.training_loss = []
 
-def train_web_model(job_steps, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
-                    train_ids, val_input, val_target, model_ckpt_path, device, metrics: Metrics, use_bf16):
-    accumulate_batch = 4      # we accumulate 4 forward steps & gradients before running optimizer backward
-    train_batch = 8           # B, batch size of input training tensor
-
+def train_web_model(config: TrainingConfig, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
+                    train_ids, val_input, val_target, model_ckpt_path, device, metrics: Metrics):
     # train the actual models
     start = time.perf_counter()
-    for step in range(job_steps):
+    for step in range(config.job_steps):
         # accumulate multiple forward runs, then run gradient descent once
         train_data_batch = []
-        for _ in range(accumulate_batch):
-            train_data_batch.append(build_input_and_target(train_ids, train_batch, model.config.max_sequence, device))
-        losses = model.train_batch(optimizer, train_data_batch, use_bf16)
+        for _ in range(config.descent_batch):
+            train_data_batch.append(build_input_and_target(train_ids, config.training_batch_size,
+                                                           model.config.max_sequence, device))
+        losses = model.train_batch(optimizer, train_data_batch, config.use_bf16)
         last_lr = lr_scheduler.get_last_lr()
         lr_scheduler.step()
         metrics.update(train_data_batch, losses, last_lr)
 
-        if metrics.completed_updates % 100 == 0 or step == job_steps - 1:
-            val_loss = validate(model, val_input, val_target, use_bf16)
+        if metrics.completed_updates % 100 == 0 or step == config.job_steps - 1:
+            val_loss = validate(model, val_input, val_target, config.use_bf16)
             print_metrics(metrics, start, time.perf_counter(), val_loss)
 
         # checkpoint periodically
-        if metrics.completed_updates % 1000 == 0 or step == job_steps - 1:
+        if metrics.completed_updates % 1000 == 0 or step == config.job_steps - 1:
             save_checkpoint(model_ckpt_path, model, optimizer, lr_scheduler, metrics.completed_updates, metrics.processed_tokens)
 
-def train_job(path, total_steps, job_steps, lr, device, max_sequence, feature_count, head_count, layer_count,
-              load, skip_training, use_bf16, model_ckpt_path = None):
+def train_job(path, config: TrainingConfig, lr, device, max_sequence, feature_count, head_count, layer_count,
+              load, skip_training, model_ckpt_path = None):
 
     random.seed(42)
     torch.manual_seed(42)
@@ -206,12 +212,12 @@ def train_job(path, total_steps, job_steps, lr, device, max_sequence, feature_co
     train_ids = np.load(train_file)
 
     if load:
-        model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(model_ckpt_path, device, lr, total_steps)
+        model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(model_ckpt_path, device, lr, config.total_steps)
         metrics = Metrics(completed_steps, lr_scheduler.get_last_lr(), processed_tokens)
     else:
         model = create_model(tokenizer, max_sequence, feature_count, head_count, layer_count, device)
         optimizer = create_adamw_optimizer(model, lr)
-        lr_scheduler = create_lr_scheduler(optimizer, lr, total_steps)
+        lr_scheduler = create_lr_scheduler(optimizer, lr, config.total_steps)
         metrics = Metrics(0, lr_scheduler.get_last_lr(), 0)
 
     # print model stats
@@ -227,25 +233,30 @@ def train_job(path, total_steps, job_steps, lr, device, max_sequence, feature_co
 
     if not skip_training:
         # train and save the initial model
-        train_web_model(job_steps, model, optimizer, lr_scheduler, train_ids, val_input, val_target,
-                        model_ckpt_path, device, metrics, use_bf16)
+        train_web_model(config, model, optimizer, lr_scheduler, train_ids, val_input, val_target,
+                        model_ckpt_path, device, metrics)
 
     return model, tokenizer
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", type= str, default = "data/processed/fineweb-2000", help = "path to tokenized training data")
-    parser.add_argument("--total-steps", type = int, default = 500, help = "total steps we aim for across all checkpoints")
-    parser.add_argument("--job-steps", type = int, default = 500, help = "number of training steps for this job")
 
     parser.add_argument("--load", action = "store_true", help = "load from checkpoint instead of starting from scratch")
     parser.add_argument("--gen-only", action = "store_true", help = "skip training, just generation")
-    parser.add_argument("--use-bf16", action = "store_true", help = "use bf16 for forward pass")
 
+    # model config
     parser.add_argument("--max-sequence", type = int, default = 64, help = "max token length in a training row")
     parser.add_argument("--feature-count", type = int, default = 64, help = "number of feature for each token")
     parser.add_argument("--head-count", type = int, default = 4, help = "number of attention head")
     parser.add_argument("--layer-count", type = int, default = 2, help = "number of transformer block in LLM")
+
+    # training config
+    parser.add_argument("--total-steps", type = int, default = 500, help = "total steps we aim for across all checkpoints")
+    parser.add_argument("--job-steps", type = int, default = 500, help = "number of training steps for this job")
+    parser.add_argument("--descent-batch", type = int, default = 4, help = "how many training batch to accumulate before running gradient descent")
+    parser.add_argument("--training-batch-size", type = int, default = 8, help = "size of training batch, the B")
+    parser.add_argument("--use-bf16", action = "store_true", help = "use bf16 for forward pass")
 
     args = parser.parse_args()
 
@@ -259,8 +270,9 @@ if __name__ == '__main__':
     lr = 1e-3
     load = args.load or args.gen_only
 
-    model, tokenizer = train_job(args.data_path, args.total_steps, args.job_steps, lr, device, args.max_sequence, args.feature_count, 
-                                 args.head_count, args.layer_count, load, args.gen_only, args.use_bf16)
+    config = TrainingConfig(args.total_steps, args.job_steps, args.descent_batch, args.training_batch_size, args.use_bf16)
+    model, tokenizer = train_job(args.data_path, config, lr, device, args.max_sequence, args.feature_count, 
+                                 args.head_count, args.layer_count, load, args.gen_only)
 
     # generate some stuff from this model
     prompt = "Baby squirrel is"

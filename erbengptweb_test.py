@@ -1,5 +1,5 @@
 import torch  # noqa: I001
-from erbengptweb import train_job, load_checkpoint
+from erbengptweb import train_job, load_checkpoint, TrainingConfig
 
 
 def test_checkpoint_resume_correctness(tmp_path):
@@ -15,8 +15,10 @@ def test_checkpoint_resume_correctness(tmp_path):
     head_count = 4
     layer_count = 2
     path = "data/processed/fineweb-2000"
-    train_job(path, total_steps, total_steps, lr, device, max_sequence, feature_count, head_count, layer_count, 
-              load=False, skip_training=False, use_bf16=False, model_ckpt_path=ckpt1)
+
+    config = TrainingConfig(total_steps, total_steps, 4, 8, False)
+    train_job(path, config, lr, device, max_sequence, feature_count, head_count, layer_count, 
+              load=False, skip_training=False, model_ckpt_path=ckpt1)
 
     # then train model 2 using repeated save & load
     count = 10
@@ -24,8 +26,9 @@ def test_checkpoint_resume_correctness(tmp_path):
     ckpt2 = tmp_path / "ckpt2"
     for i in range(count):
         load = i > 0
-        train_job(path, total_steps, steps, lr, device, max_sequence, feature_count, head_count, layer_count,
-                  load=load, skip_training=False, use_bf16=False, model_ckpt_path=ckpt2)
+        config = TrainingConfig(total_steps, steps, 4, 8, False)
+        train_job(path, config, lr, device, max_sequence, feature_count, head_count, layer_count,
+                  load=load, skip_training=False, model_ckpt_path=ckpt2)
 
     # load both models checkpoints
     model1, optimizer1, lr_scheduler1, completed_steps1, processed_tokens1 = load_checkpoint(ckpt1, device, lr, total_steps)
