@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import random
 import time
@@ -6,6 +7,8 @@ from statistics import mean
 
 import numpy as np
 import torch
+from erbengpt import LanguageModel, ModelConfig
+from erbentokenizer import SEP, build_input_and_target
 from tokenizers import Tokenizer
 from torch.optim.adamw import AdamW
 from torch.optim.lr_scheduler import (
@@ -15,17 +18,20 @@ from torch.optim.lr_scheduler import (
     SequentialLR,
 )
 
-from erbengpt import LanguageModel, ModelConfig
-from erbentokenizer import SEP, build_input_and_target
-
 
 class TrainingConfig:
-    def __init__(self, total_steps, job_steps, descent_batch = 4, training_batch_size = 8, use_bf16 = False):
+    def __init__(self, data_dir, run_dir, total_steps, job_steps, 
+                 descent_batch = 4, training_batch_size = 8, use_bf16 = False):
+        self.data_dir = data_dir
+        self.run_dir = run_dir
         self.total_steps = total_steps
         self.job_steps = job_steps
         self.descent_batch = descent_batch               # how many training batch to accumulate before running gradient descent
         self.training_batch_size = training_batch_size   # size of training batch, the "B"
         self.use_bf16 = use_bf16                         # use bf16 for computation (weight is still stored as fp32)
+
+    def checkpoint_file(self):
+        return self.run_dir + "/" + "model.web.ckpt"
 
 class Metrics:
     def __init__(self, completed_updates, last_lr, processed_tokens):
@@ -140,8 +146,8 @@ def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
     os.replace(ckpt_tmp, ckpt_file)
     print(f"Saved checkpoint: {ckpt_file}")
 
-def load_checkpoint(model_ckpt, device, lr, total_iters) -> tuple[LanguageModel, AdamW, LRScheduler, int, int]:
-    ckpt = torch.load(model_ckpt, 'cpu', weights_only = False)
+def load_checkpoint(config: TrainingConfig, device, lr, total_iters) -> tuple[LanguageModel, AdamW, LRScheduler, int, int]:
+    ckpt = torch.load(config.checkpoint_file(), 'cpu', weights_only = False)
     model = LanguageModel.load(ckpt).to(device)
     optimizer = create_adamw_optimizer(model, lr)
     # creating scheduler will overwrite the learning rate in optimizer
@@ -163,7 +169,7 @@ def load_checkpoint(model_ckpt, device, lr, total_iters) -> tuple[LanguageModel,
     completed_steps = ckpt['completed-steps']
     processed_tokens = ckpt['processed_tokens']
 
-    print(f"Loaded checkpoint: {model_ckpt}")
+    print(f"Loaded checkpoint: {config.checkpoint_file()}")
     return model, optimizer, lr_scheduler, completed_steps, processed_tokens
 
 def print_metrics(metrics: Metrics, start, new_time, val_loss):
@@ -172,7 +178,7 @@ def print_metrics(metrics: Metrics, start, new_time, val_loss):
     metrics.training_loss = []
 
 def train_web_model(config: TrainingConfig, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
-                    train_ids, val_input, val_target, model_ckpt_path, device, metrics: Metrics):
+                    train_ids, val_input, val_target, device, metrics: Metrics):
     # train the actual models
     start = time.perf_counter()
     for step in range(config.job_steps):
@@ -192,27 +198,47 @@ def train_web_model(config: TrainingConfig, model: LanguageModel, optimizer: Ada
 
         # checkpoint periodically
         if metrics.completed_updates % 1000 == 0 or step == config.job_steps - 1:
-            save_checkpoint(model_ckpt_path, model, optimizer, lr_scheduler, metrics.completed_updates, metrics.processed_tokens)
+            save_checkpoint(config.checkpoint_file(), model, optimizer, lr_scheduler, metrics.completed_updates, metrics.processed_tokens)
 
-def train_job(path, config: TrainingConfig, lr, device, max_sequence, feature_count, head_count, layer_count,
-              load, skip_training, model_ckpt_path = None):
+def save_config(training_config: TrainingConfig, model: LanguageModel, load):
+    config = {"training_config" : vars(training_config),
+              "model_config" : vars(model.config),
+              "total_parameter" : model.get_total_parameter()}
+    file = training_config.run_dir + "/" + "config.json"
+
+    # for resume training: verify model config. training config may differ.
+    if load:
+        with open(file, "r") as f:
+            existing_config = json.load(f)
+            existing_model_config = ModelConfig.load(existing_config["model_config"])
+            if vars(existing_model_config) != vars(model.config):
+                raise ValueError(f"Resume Model Config doesn't match original config: {vars(model.config)}, existing: {vars(existing_model_config)}")
+            existing_training_config = TrainingConfig(**existing_config["training_config"])
+            if existing_training_config.data_dir != training_config.data_dir or existing_training_config.total_steps != training_config.total_steps:
+                raise ValueError(f"Resume Training Config doesn't match original config: {vars(training_config)}, existing: {vars(existing_training_config)}")
+            return
+    
+    print(f"config: {json.dumps(config, indent=2)}")
+    with open(file, "w") as f:
+        json.dump(config, f, indent=2)
+    
+def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, head_count, layer_count,
+              load, skip_training):
 
     random.seed(42)
     torch.manual_seed(42)
+    os.makedirs(config.run_dir, exist_ok = True)
 
     # get tokenizer
-    file = path + "/" + "tokenizer.json"
+    file = config.data_dir + "/" + "tokenizer.json"
     tokenizer = Tokenizer.from_file(file)
 
-    if model_ckpt_path == None:
-        model_ckpt_path = "checkpoints" + "/" + "model.web.ckpt"
-
     # get the tokenized train dataset
-    train_file = path + "/" + "train.tokenized.npy"
+    train_file = config.data_dir + "/" + "train.tokenized.npy"
     train_ids = np.load(train_file)
 
     if load:
-        model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(model_ckpt_path, device, lr, config.total_steps)
+        model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(config, device, lr, config.total_steps)
         metrics = Metrics(completed_steps, lr_scheduler.get_last_lr(), processed_tokens)
     else:
         model = create_model(tokenizer, max_sequence, feature_count, head_count, layer_count, device)
@@ -220,12 +246,11 @@ def train_job(path, config: TrainingConfig, lr, device, max_sequence, feature_co
         lr_scheduler = create_lr_scheduler(optimizer, lr, config.total_steps)
         metrics = Metrics(0, lr_scheduler.get_last_lr(), 0)
 
-    # print model stats
-    print(f"Model Config: {model.config.save()}")
-    print(f"Model total parameter count: {model.get_total_parameter()}")
+    if not skip_training:
+        save_config(config, model, load)
 
     # get tokenized val dataset
-    val_file = path + "/" + "val.tokenized.npy"
+    val_file = config.data_dir + "/" + "val.tokenized.npy"
     val_ids = np.load(val_file)
     val_batch = 64
     val_input, val_target = build_input_and_target(val_ids, val_batch, model.config.max_sequence, device,
@@ -234,13 +259,14 @@ def train_job(path, config: TrainingConfig, lr, device, max_sequence, feature_co
     if not skip_training:
         # train and save the initial model
         train_web_model(config, model, optimizer, lr_scheduler, train_ids, val_input, val_target,
-                        model_ckpt_path, device, metrics)
+                        device, metrics)
 
     return model, tokenizer
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", type= str, default = "data/processed/fineweb-2000", help = "path to tokenized training data")
+    parser.add_argument("--run-path", type= str, default = "./experiments/", help = "path to run directory")
 
     parser.add_argument("--load", action = "store_true", help = "load from checkpoint instead of starting from scratch")
     parser.add_argument("--gen-only", action = "store_true", help = "skip training, just generation")
@@ -252,7 +278,7 @@ if __name__ == '__main__':
     parser.add_argument("--layer-count", type = int, default = 2, help = "number of transformer block in LLM")
 
     # training config
-    parser.add_argument("--total-steps", type = int, default = 500, help = "total steps we aim for across all checkpoints")
+    parser.add_argument("--total-steps", type = int, default = 1000000, help = "total steps we aim for across all checkpoints")
     parser.add_argument("--job-steps", type = int, default = 500, help = "number of training steps for this job")
     parser.add_argument("--descent-batch", type = int, default = 4, help = "how many training batch to accumulate before running gradient descent")
     parser.add_argument("--training-batch-size", type = int, default = 8, help = "size of training batch, the B")
@@ -270,8 +296,9 @@ if __name__ == '__main__':
     lr = 1e-3
     load = args.load or args.gen_only
 
-    config = TrainingConfig(args.total_steps, args.job_steps, args.descent_batch, args.training_batch_size, args.use_bf16)
-    model, tokenizer = train_job(args.data_path, config, lr, device, args.max_sequence, args.feature_count, 
+    config = TrainingConfig(args.data_path, args.run_path, args.total_steps, args.job_steps, 
+                            args.descent_batch, args.training_batch_size, args.use_bf16)
+    model, tokenizer = train_job(config, lr, device, args.max_sequence, args.feature_count, 
                                  args.head_count, args.layer_count, load, args.gen_only)
 
     # generate some stuff from this model

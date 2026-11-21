@@ -105,15 +105,6 @@ class ModelConfig:
         self.layer_count = layer_count
         self.attention_mode = attention_mode
 
-    def save(self) -> dict:
-        ckpt = {'vocab_size' : self.vocab_size,
-                'max_sequence' : self.max_sequence,
-                'feature_count' : self.feature_count,
-                'head_count' : self.head_count,
-                "layer_count" : self.layer_count,
-                "attention_mode" : self.attention_mode}
-        return ckpt
-
     @staticmethod
     def load(ckpt):
         config = ModelConfig(ckpt['vocab_size'],
@@ -170,7 +161,7 @@ class LanguageModel(nn.Module):
         return self.linear(features)
 
     def save(self) -> dict:
-        ckpt = {'config' : self.config.save(),
+        ckpt = {'config' : vars(self.config),
                 'weight' : self.state_dict()}
         return ckpt
 

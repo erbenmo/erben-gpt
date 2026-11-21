@@ -3,7 +3,6 @@ import random
 import numpy as np
 import pytest
 import torch
-
 from erbentokenizer import (
     BPETokenizer,
     download_documents,
