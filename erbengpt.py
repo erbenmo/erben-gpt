@@ -173,13 +173,13 @@ class LanguageModel(nn.Module):
         return model
 
     def _generate_loss(self, input: torch.Tensor, target: torch.Tensor,
-                       use_bf16 = False):
+                       use_bf16 = False, reduction = "mean") -> torch.Tensor:
         with torch.autocast(input.device.type, dtype=torch.bfloat16, enabled=use_bf16):
             # forward pass - train on this input
             logits = self(input) # shape: [batch, N, vocab_size]
             # cross entropy expects shape [batch, vocab_size, N]
             logits = logits.transpose(1, 2)
-            loss = F.cross_entropy(logits, target, ignore_index = -100)
+            loss = F.cross_entropy(logits, target, ignore_index = -100, reduction = reduction)
             return loss
 
     # run multiple forward run and accumulate gradients, then run gradient descent once

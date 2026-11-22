@@ -33,13 +33,25 @@ class TrainingConfig:
     def checkpoint_file(self):
         return self.run_dir + "/" + "model.web.ckpt"
 
-class Metrics:
-    def __init__(self, completed_updates, last_lr, processed_tokens):
+class TrainingMetrics:
+    def __init__(self, completed_updates, last_lr, processed_tokens, training_duration_ms, val_tokens, val_loss):
         self.completed_updates = completed_updates # number of times we complete entire forward + backward training
         self.last_lr = last_lr
         self.processed_tokens = processed_tokens
         self.training_loss = []
         self.validation_loss = 0
+        self.training_duration_ms = training_duration_ms
+        self.val_tokens = val_tokens
+        self.val_loss = val_loss
+        self.start_time = 0
+
+    def start(self):
+        self.start_time = time.perf_counter()
+
+    def update_duration(self):
+        current = time.perf_counter()
+        self.training_duration_ms += (current - self.start_time) * 1000
+        self.start_time = current
 
     def update(self, train_data_batch, losses, last_lr):
         self.completed_updates += 1
@@ -48,8 +60,9 @@ class Metrics:
         for (input, _) in train_data_batch:
             B, N = input.shape
             self.processed_tokens += B * N
+        self.update_duration()
 
-    def log_event(self, elapsed_ms):
+    def log_event(self):
         mean_loss = mean(self.training_loss) if len(self.training_loss) > 0 else float("nan")
         print(
             f"completed_updates: {self.completed_updates}, "
@@ -57,13 +70,13 @@ class Metrics:
             f"validation_loss: {self.validation_loss}, "
             f"learning_rate: {self.last_lr}, "
             f"processed tokens: {self.processed_tokens}, "
-            f"elapsed time(ms): {elapsed_ms}"
+            f"training duration(ms): {self.training_duration_ms}"
         )
 
 @torch.no_grad()
-def validate(model: LanguageModel, input, target, use_bf16):
+def validate(model: LanguageModel, input, target, use_bf16, reduction = "mean") -> torch.Tensor:
     model.eval()
-    return model._generate_loss(input, target, use_bf16)
+    return model._generate_loss(input, target, use_bf16, reduction)
 
 @torch.no_grad()
 def generate(model: LanguageModel, tokenizer: Tokenizer, prompt: str, device, max_generation = 64):
@@ -123,8 +136,7 @@ def create_lr_scheduler(optimizer: AdamW, peak_lr, total_iters) -> LRScheduler:
     milestones=[warmup_iters]
     return SequentialLR(optimizer, [linear_lr, cosine_lr], milestones)
 
-def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
-                    lr_scheduler: LRScheduler, completed_steps: int, processed_tokens: int):
+def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler, metrics: TrainingMetrics):
     ckpt = model.save()
     ckpt.update({
         'optimizer': optimizer.state_dict(),
@@ -138,15 +150,16 @@ def save_checkpoint(ckpt_file, model: LanguageModel, optimizer: AdamW,
     if torch.backends.mps.is_available():
         ckpt['mps'] = torch.mps.get_rng_state()
 
-    ckpt['completed-steps'] = completed_steps
-    ckpt['processed_tokens'] = processed_tokens
+    ckpt['completed_updates'] = metrics.completed_updates
+    ckpt['processed_tokens'] = metrics.processed_tokens
+    ckpt['training_duration_ms'] = metrics.training_duration_ms
 
     ckpt_tmp = f"{ckpt_file}.tmp"
     torch.save(ckpt, ckpt_tmp)
     os.replace(ckpt_tmp, ckpt_file)
     print(f"Saved checkpoint: {ckpt_file}")
 
-def load_checkpoint(config: TrainingConfig, device, lr, total_iters) -> tuple[LanguageModel, AdamW, LRScheduler, int, int]:
+def load_checkpoint(config: TrainingConfig, device, lr, total_iters) -> tuple[LanguageModel, AdamW, LRScheduler, TrainingMetrics]:
     ckpt = torch.load(config.checkpoint_file(), 'cpu', weights_only = False)
     model = LanguageModel.load(ckpt).to(device)
     optimizer = create_adamw_optimizer(model, lr)
@@ -166,21 +179,24 @@ def load_checkpoint(config: TrainingConfig, device, lr, total_iters) -> tuple[La
     if "mps" in ckpt:
         torch.mps.set_rng_state(ckpt["mps"].cpu())
 
-    completed_steps = ckpt['completed-steps']
+    completed_steps = ckpt['completed_updates']
     processed_tokens = ckpt['processed_tokens']
+    training_duration_ms = ckpt['training_duration_ms']
+
+    metrics = TrainingMetrics(completed_steps, lr_scheduler.get_last_lr(), processed_tokens, training_duration_ms, 0, 0)
 
     print(f"Loaded checkpoint: {config.checkpoint_file()}")
-    return model, optimizer, lr_scheduler, completed_steps, processed_tokens
+    return model, optimizer, lr_scheduler, metrics
 
-def print_metrics(metrics: Metrics, start, new_time, val_loss):
+def print_metrics(metrics: TrainingMetrics, val_loss):
     metrics.validation_loss = val_loss.item()
-    metrics.log_event((new_time - start) * 1000)
+    metrics.log_event()
     metrics.training_loss = []
 
 def train_web_model(config: TrainingConfig, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
-                    train_ids, val_input, val_target, device, metrics: Metrics):
+                    train_ids, val_input, val_target, device, metrics: TrainingMetrics):
     # train the actual models
-    start = time.perf_counter()
+    metrics.start()
     for step in range(config.job_steps):
         # accumulate multiple forward runs, then run gradient descent once
         train_data_batch = []
@@ -194,17 +210,19 @@ def train_web_model(config: TrainingConfig, model: LanguageModel, optimizer: Ada
 
         if metrics.completed_updates % 100 == 0 or step == config.job_steps - 1:
             val_loss = validate(model, val_input, val_target, config.use_bf16)
-            print_metrics(metrics, start, time.perf_counter(), val_loss)
+            print_metrics(metrics, val_loss)
 
         # checkpoint periodically
         if metrics.completed_updates % 1000 == 0 or step == config.job_steps - 1:
-            save_checkpoint(config.checkpoint_file(), model, optimizer, lr_scheduler, metrics.completed_updates, metrics.processed_tokens)
+            save_checkpoint(config.checkpoint_file(), model, optimizer, lr_scheduler, metrics)
+
+    return metrics
 
 def save_config(training_config: TrainingConfig, model: LanguageModel, load):
     config = {"training_config" : vars(training_config),
               "model_config" : vars(model.config),
               "total_parameter" : model.get_total_parameter()}
-    file = training_config.run_dir + "/" + "config.json"
+    file = training_config.run_dir + "/config.json"
 
     # for resume training: verify model config. training config may differ.
     if load:
@@ -221,9 +239,45 @@ def save_config(training_config: TrainingConfig, model: LanguageModel, load):
     print(f"config: {json.dumps(config, indent=2)}")
     with open(file, "w") as f:
         json.dump(config, f, indent=2)
-    
+
+# large scale validation on 1M tokens after training
+def post_training_validation(training_config: TrainingConfig, model: LanguageModel, val_ids, val_batch, device):
+
+    rng = random.Random(42)
+
+    print("Start post-training validation")
+    # aggregated
+    val_tokens = 0
+    val_losses = 0
+
+    # validate a new batch until we validate 1M tokens
+    while val_tokens < 1000000:
+        val_input, val_target = build_input_and_target(val_ids, val_batch, model.config.max_sequence, device, rng)
+        loss = validate(model, val_input, val_target, training_config.use_bf16, reduction = "sum")
+        val_losses += loss.item()
+        val_tokens += val_input.numel()
+
+    average_loss_per_token = val_losses / val_tokens
+    print(f"Completed post-training validation, loss: {average_loss_per_token}")
+    return (average_loss_per_token, val_tokens)
+
+def save_training_result(training_config: TrainingConfig, model: LanguageModel, metrics: TrainingMetrics):
+    if metrics.completed_updates >= training_config.total_steps and metrics.val_tokens > 0:
+        status = "completed"
+    else:
+        status = "in_progress"
+    result = {
+        "status": status,
+        "parameter_count": model.get_total_parameter(),
+        "metrics": vars(metrics)
+    }
+    file = training_config.run_dir + "/result.json"
+    with open(file, "w") as file:
+        json.dump(result, file, indent=2)
+    print(f"Training result: {json.dumps(result, indent=2)}")
+
 def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, head_count, layer_count,
-              load, skip_training):
+              load, training, final_validation=True):
 
     random.seed(42)
     torch.manual_seed(42)
@@ -238,15 +292,14 @@ def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, h
     train_ids = np.load(train_file)
 
     if load:
-        model, optimizer, lr_scheduler, completed_steps, processed_tokens = load_checkpoint(config, device, lr, config.total_steps)
-        metrics = Metrics(completed_steps, lr_scheduler.get_last_lr(), processed_tokens)
+        model, optimizer, lr_scheduler, metrics = load_checkpoint(config, device, lr, config.total_steps)
     else:
         model = create_model(tokenizer, max_sequence, feature_count, head_count, layer_count, device)
         optimizer = create_adamw_optimizer(model, lr)
         lr_scheduler = create_lr_scheduler(optimizer, lr, config.total_steps)
-        metrics = Metrics(0, lr_scheduler.get_last_lr(), 0)
+        metrics = TrainingMetrics(0, lr_scheduler.get_last_lr(), 0, 0, 0, 0)
 
-    if not skip_training:
+    if training:
         save_config(config, model, load)
 
     # get tokenized val dataset
@@ -256,10 +309,13 @@ def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, h
     val_input, val_target = build_input_and_target(val_ids, val_batch, model.config.max_sequence, device,
                                                    random.Random(42))
 
-    if not skip_training:
+    if training:
         # train and save the initial model
-        train_web_model(config, model, optimizer, lr_scheduler, train_ids, val_input, val_target,
-                        device, metrics)
+        metrics = train_web_model(config, model, optimizer, lr_scheduler, train_ids, val_input, val_target, 
+                                  device, metrics)
+        if final_validation:
+            metrics.val_loss, metrics.val_tokens = post_training_validation(config, model, val_ids, val_batch, device)
+        save_training_result(config, model, metrics)
 
     return model, tokenizer
 
@@ -299,7 +355,7 @@ if __name__ == '__main__':
     config = TrainingConfig(args.data_path, args.run_path, args.total_steps, args.job_steps, 
                             args.descent_batch, args.training_batch_size, args.use_bf16)
     model, tokenizer = train_job(config, lr, device, args.max_sequence, args.feature_count, 
-                                 args.head_count, args.layer_count, load, args.gen_only)
+                                 args.head_count, args.layer_count, load, not args.gen_only)
 
     # generate some stuff from this model
     prompt = "Baby squirrel is"

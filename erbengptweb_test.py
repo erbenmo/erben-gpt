@@ -18,7 +18,7 @@ def test_checkpoint_resume_correctness(tmp_path):
 
     config1 = TrainingConfig(data_path, path1, total_steps, total_steps, 4, 8, False)
     train_job(config1, lr, device, max_sequence, feature_count, head_count, layer_count, 
-              load=False, skip_training=False)
+              load=False, training=True, final_validation=False)
 
     # then train model 2 using repeated save & load
     count = 10
@@ -28,15 +28,15 @@ def test_checkpoint_resume_correctness(tmp_path):
     for i in range(count):
         load = i > 0
         train_job(config2, lr, device, max_sequence, feature_count, head_count, layer_count,
-                  load=load, skip_training=False)
+                  load=load, training=True, final_validation=False)
 
     # load both models checkpoints
-    model1, optimizer1, lr_scheduler1, completed_steps1, processed_tokens1 = load_checkpoint(config1, device, lr, total_steps)
-    model2, optimizer2, lr_scheduler2, completed_steps2, processed_tokens2 = load_checkpoint(config2, device, lr, total_steps)
+    model1, optimizer1, lr_scheduler1, metrics1 = load_checkpoint(config1, device, lr, total_steps)
+    model2, optimizer2, lr_scheduler2, metrics2 = load_checkpoint(config2, device, lr, total_steps)
 
     # assert the 2 models have the same weight
     torch.testing.assert_close(model1.state_dict(), model2.state_dict(), rtol=0, atol=0)
     torch.testing.assert_close(optimizer1.state_dict(), optimizer2.state_dict(), rtol=0, atol=0)
     torch.testing.assert_close(lr_scheduler1.state_dict(), lr_scheduler2.state_dict(), rtol=0, atol=0)
-    assert completed_steps1 == completed_steps2 == total_steps
-    assert processed_tokens1 == processed_tokens2
+    assert metrics1.completed_updates == metrics2.completed_updates == total_steps
+    assert metrics1.processed_tokens == metrics2.processed_tokens
