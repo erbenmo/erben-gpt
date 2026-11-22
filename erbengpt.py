@@ -183,16 +183,17 @@ class LanguageModel(nn.Module):
             return loss
 
     # run multiple forward run and accumulate gradients, then run gradient descent once
-    def train_batch(self, optimizer, train_data_batch, use_bf16):
+    def train_batch(self, optimizer, train_data_batch, use_bf16, flopCounter):
         self.train()
         optimizer.zero_grad()
 
         losses = []
-        # forward run + accumulate gradient
-        for (input, target) in train_data_batch:
-            loss = self._generate_loss(input, target, use_bf16)
-            loss.backward()
-            losses.append(loss.item())
+        with flopCounter:
+            # forward run + accumulate gradient
+            for (input, target) in train_data_batch:
+                    loss = self._generate_loss(input, target, use_bf16)
+                    loss.backward()
+                    losses.append(loss.item())
 
         # now average the accumulated gradient
         batch_size = len(train_data_batch)

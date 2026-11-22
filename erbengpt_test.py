@@ -1,3 +1,4 @@
+import contextlib
 import copy
 import time
 
@@ -86,7 +87,7 @@ def test_train_model_batch(dataset):
         data_batch = []
         for _ in range(4):
             data_batch.append(prepare_batch(names, tokenizer))
-        model.train_batch(optimizer, data_batch, use_bf16 = False)
+        model.train_batch(optimizer, data_batch, False, contextlib.nullcontext())
     
     loss = validate_all(model, tokenizer, train_data, 8)
     print(f"loss after batch train: {loss}")

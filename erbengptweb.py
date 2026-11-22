@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import json
 import os
 import random
@@ -17,11 +18,12 @@ from torch.optim.lr_scheduler import (
     LRScheduler,
     SequentialLR,
 )
+from torch.utils.flop_counter import FlopCounterMode
 
 
 class TrainingConfig:
     def __init__(self, data_dir, run_dir, total_steps, job_steps, 
-                 descent_batch = 4, training_batch_size = 8, use_bf16 = False):
+                 descent_batch = 4, training_batch_size = 8, use_bf16 = False, count_flops = False):
         self.data_dir = data_dir
         self.run_dir = run_dir
         self.total_steps = total_steps
@@ -29,6 +31,7 @@ class TrainingConfig:
         self.descent_batch = descent_batch               # how many training batch to accumulate before running gradient descent
         self.training_batch_size = training_batch_size   # size of training batch, the "B"
         self.use_bf16 = use_bf16                         # use bf16 for computation (weight is still stored as fp32)
+        self.count_flops = count_flops
 
     def checkpoint_file(self):
         return self.run_dir + "/" + "model.web.ckpt"
@@ -49,6 +52,7 @@ class TrainingMetrics:
         self.final_val_loss = val_loss
         self.start_time = 0
         self.events = []
+        self.flops = 0
 
     def start(self):
         self.start_time = time.perf_counter()
@@ -58,13 +62,17 @@ class TrainingMetrics:
         self.training_duration_ms += (current - self.start_time) * 1000
         self.start_time = current
 
-    def update(self, train_data_batch, losses, last_lr):
+    def update_step(self, train_data_batch, losses, last_lr, flop_counter):
         self.completed_updates += 1
         self.last_lr = last_lr
         self.training_loss.extend(losses)
         for (input, _) in train_data_batch:
             B, N = input.shape
             self.training_tokens += B * N
+
+        if isinstance(flop_counter, FlopCounterMode):
+            self.flops += flop_counter.get_total_flops()
+
         self.update_duration()
 
     def log_event(self):
@@ -232,10 +240,11 @@ def train_web_model(config: TrainingConfig, model: LanguageModel, optimizer: Ada
         for _ in range(config.descent_batch):
             train_data_batch.append(build_input_and_target(train_ids, config.training_batch_size,
                                                            model.config.max_sequence, device))
-        losses = model.train_batch(optimizer, train_data_batch, config.use_bf16)
+        flop_counter = FlopCounterMode(display=False) if config.count_flops else contextlib.nullcontext()
+        losses = model.train_batch(optimizer, train_data_batch, config.use_bf16, flop_counter)
         last_lr = lr_scheduler.get_last_lr()
         lr_scheduler.step()
-        metrics.update(train_data_batch, losses, last_lr)
+        metrics.update_step(train_data_batch, losses, last_lr, flop_counter)
 
         if metrics.completed_updates % 100 == 0 or step == config.job_steps - 1:
             val_loss = validate(model, val_input, val_target, config.use_bf16)
@@ -301,6 +310,10 @@ def save_training_result(training_config: TrainingConfig, model: LanguageModel, 
         "parameter_count": model.get_total_parameter(),
         "metrics": metrics.state_dict(),
     }
+    if training_config.count_flops:
+        result["flops"] = metrics.flops
+        result["flops_per_token"] = metrics.flops / metrics.training_tokens
+    
     file = training_config.run_dir + "/result.json"
     with open(file, "w") as file:
         json.dump(result, file, indent=2)
@@ -375,6 +388,7 @@ if __name__ == '__main__':
     parser.add_argument("--descent-batch", type = int, default = 4, help = "how many training batch to accumulate before running gradient descent")
     parser.add_argument("--training-batch-size", type = int, default = 8, help = "size of training batch, the B")
     parser.add_argument("--use-bf16", action = "store_true", help = "use bf16 for forward pass")
+    parser.add_argument("--count-flops", action = "store_true", help = "count FLOPs during forward and backward")
 
     args = parser.parse_args()
 
@@ -389,7 +403,7 @@ if __name__ == '__main__':
     load = args.load or args.gen_only
 
     config = TrainingConfig(args.data_path, args.run_path, args.total_steps, args.job_steps, 
-                            args.descent_batch, args.training_batch_size, args.use_bf16)
+                            args.descent_batch, args.training_batch_size, args.use_bf16, args.count_flops)
     model, tokenizer = train_job(config, lr, device, args.max_sequence, args.feature_count, 
                                  args.head_count, args.layer_count, load, not args.gen_only)
 
