@@ -248,7 +248,7 @@ def train_web_model(config: TrainingConfig, model: LanguageModel, optimizer: Ada
 
     return metrics
 
-def save_config(training_config: TrainingConfig, model: LanguageModel, load):
+def save_training_config(training_config: TrainingConfig, model: LanguageModel, load):
     config = {"training_config" : vars(training_config),
               "model_config" : vars(model.config),
               "total_parameter" : model.get_total_parameter()}
@@ -321,10 +321,6 @@ def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, h
     file = config.data_dir + "/" + "tokenizer.json"
     tokenizer = Tokenizer.from_file(file)
 
-    # get the tokenized train dataset
-    train_file = config.data_dir + "/" + "train.tokenized.npy"
-    train_ids = np.load(train_file)
-
     if load:
         model, optimizer, lr_scheduler, metrics = load_checkpoint(config, device, lr, config.total_steps)
     else:
@@ -333,8 +329,15 @@ def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, h
         lr_scheduler = create_lr_scheduler(optimizer, lr, config.total_steps)
         metrics = TrainingMetrics(config.metrics_file(), 0, lr_scheduler.get_last_lr(), 0, 0, 0, 0)
 
-    if training:
-        save_config(config, model, load)
+    if not training:
+        return model, tokenizer
+
+    # training only after this
+    save_training_config(config, model, load)
+
+    # get the tokenized train dataset
+    train_file = config.data_dir + "/" + "train.tokenized.npy"
+    train_ids = np.load(train_file)
 
     # get tokenized val dataset
     val_file = config.data_dir + "/" + "val.tokenized.npy"
@@ -343,13 +346,12 @@ def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, h
     val_input, val_target = build_input_and_target(val_ids, val_batch, model.config.max_sequence, device,
                                                    random.Random(42))
 
-    if training:
-        # train and save the initial model
-        metrics = train_web_model(config, model, optimizer, lr_scheduler, train_ids, val_input, val_target, 
-                                  device, metrics)
-        if final_validation:
-            metrics.final_val_loss, metrics.final_val_tokens = post_training_validation(config, model, val_ids, val_batch, device)
-        save_training_result(config, model, metrics)
+    # train and save the initial model
+    metrics = train_web_model(config, model, optimizer, lr_scheduler, train_ids, val_input, val_target, 
+                                device, metrics)
+    if final_validation:
+        metrics.final_val_loss, metrics.final_val_tokens = post_training_validation(config, model, val_ids, val_batch, device)
+    save_training_result(config, model, metrics)
 
     return model, tokenizer
 
