@@ -39,4 +39,4 @@ def test_checkpoint_resume_correctness(tmp_path):
     torch.testing.assert_close(optimizer1.state_dict(), optimizer2.state_dict(), rtol=0, atol=0)
     torch.testing.assert_close(lr_scheduler1.state_dict(), lr_scheduler2.state_dict(), rtol=0, atol=0)
     assert metrics1.completed_updates == metrics2.completed_updates == total_steps
-    assert metrics1.processed_tokens == metrics2.processed_tokens
+    assert metrics1.training_tokens == metrics2.training_tokens
