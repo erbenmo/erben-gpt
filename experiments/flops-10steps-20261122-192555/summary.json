@@ -1,0 +1,91 @@
+{
+  "revision": "47d26d9d15e90a4c952f7e78080a5709a750c0e9",
+  "torch_version": "2.14.0+cu130",
+  "gpu": "NVIDIA A10G",
+  "sequence_length": 256,
+  "batch_size": 1,
+  "accumulation": 1,
+  "job_steps": 10,
+  "use_bf16": true,
+  "attention_mode": "sdpa",
+  "runs": [
+    {
+      "name": "d128-l2-h2",
+      "feature_count": 128,
+      "layer_count": 2,
+      "head_count": 2,
+      "run_dir": "experiments/flops-10steps-20261122-192555/d128-l2-h2",
+      "parameter_count": 2533888,
+      "flops": 24494735360,
+      "flops_per_token": 9568256.0,
+      "training_tokens": 2560,
+      "status": "measured",
+      "wall_seconds": 2.1206720990594476
+    },
+    {
+      "name": "d256-l3-h4",
+      "feature_count": 256,
+      "layer_count": 3,
+      "head_count": 4,
+      "run_dir": "experiments/flops-10steps-20261122-192555/d256-l3-h4",
+      "parameter_count": 6634752,
+      "flops": 75497472000,
+      "flops_per_token": 29491200.0,
+      "training_tokens": 2560,
+      "status": "measured",
+      "wall_seconds": 0.9225370999192819
+    },
+    {
+      "name": "d384-l4-h6",
+      "feature_count": 384,
+      "layer_count": 4,
+      "head_count": 6,
+      "run_dir": "experiments/flops-10steps-20261122-192555/d384-l4-h6",
+      "parameter_count": 13490432,
+      "flops": 171127603200,
+      "flops_per_token": 66846720.0,
+      "training_tokens": 2560,
+      "status": "measured",
+      "wall_seconds": 1.5945435020839795
+    },
+    {
+      "name": "d512-l6-h8",
+      "feature_count": 512,
+      "layer_count": 6,
+      "head_count": 8,
+      "run_dir": "experiments/flops-10steps-20261122-192555/d512-l6-h8",
+      "parameter_count": 27430912,
+      "flops": 382520524800,
+      "flops_per_token": 149422080.0,
+      "training_tokens": 2560,
+      "status": "measured",
+      "wall_seconds": 2.9418701169779524
+    },
+    {
+      "name": "d640-l8-h10",
+      "feature_count": 640,
+      "layer_count": 8,
+      "head_count": 10,
+      "run_dir": "experiments/flops-10steps-20261122-192555/d640-l8-h10",
+      "parameter_count": 50026752,
+      "flops": 731486617600,
+      "flops_per_token": 285736960.0,
+      "training_tokens": 2560,
+      "status": "measured",
+      "wall_seconds": 4.905788328032941
+    },
+    {
+      "name": "d768-l12-h12",
+      "feature_count": 768,
+      "layer_count": 12,
+      "head_count": 12,
+      "run_dir": "experiments/flops-10steps-20261122-192555/d768-l12-h12",
+      "parameter_count": 97806848,
+      "flops": 1485790248960,
+      "flops_per_token": 580386816.0,
+      "training_tokens": 2560,
+      "status": "measured",
+      "wall_seconds": 8.748866086010821
+    }
+  ]
+}
