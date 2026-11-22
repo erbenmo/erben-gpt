@@ -349,12 +349,12 @@ def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, h
     save_training_config(config, model, load)
 
     # get the tokenized train dataset
-    train_file = config.data_dir + "/" + "train.tokenized.npy"
-    train_ids = np.load(train_file)
+    train_file = config.data_dir + "/" + "train.tokenized.bin"
+    train_ids = np.memmap(train_file, dtype = np.uint16, mode = "r")
 
     # get tokenized val dataset
-    val_file = config.data_dir + "/" + "val.tokenized.npy"
-    val_ids = np.load(val_file)
+    val_file = config.data_dir + "/" + "val.tokenized.bin"
+    val_ids = np.memmap(val_file, dtype = np.uint16, mode = "r")
     val_batch = 64
     val_input, val_target = build_input_and_target(val_ids, val_batch, model.config.max_sequence, device,
                                                    random.Random(42))
@@ -370,7 +370,7 @@ def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, h
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-path", type= str, default = "data/processed/fineweb-2000", help = "path to tokenized training data")
+    parser.add_argument("--data-path", type= str, default = "data/processed/fineweb-scale", help = "path to tokenized training data")
     parser.add_argument("--run-path", type= str, default = "./experiments/", help = "path to run directory")
 
     parser.add_argument("--load", action = "store_true", help = "load from checkpoint instead of starting from scratch")

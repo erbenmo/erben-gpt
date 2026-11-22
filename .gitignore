@@ -6,3 +6,4 @@ data/raw/
 *.tokenized.npy
 logs/
 experiments/
+*.tokenized.bin

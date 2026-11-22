@@ -14,7 +14,7 @@ def test_checkpoint_resume_correctness(tmp_path):
     feature_count = 64
     head_count = 4
     layer_count = 2
-    data_path = "data/processed/fineweb-2000"
+    data_path = "data/processed/fineweb-scale"
 
     config1 = TrainingConfig(data_path, path1, total_steps, total_steps, 4, 8, False)
     train_job(config1, lr, device, max_sequence, feature_count, head_count, layer_count, 
