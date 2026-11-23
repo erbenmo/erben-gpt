@@ -230,16 +230,35 @@ def load_checkpoint(config: TrainingConfig, device, lr, total_iters) -> tuple[La
     print(f"Loaded checkpoint: {config.checkpoint_file()}")
     return model, optimizer, lr_scheduler, metrics
 
+def shuffle_training_chunks(train_ids, max_sequence):
+    chunk_count = int((len(train_ids) - 1) / max_sequence) # minus 1 because we peek ahead by 1 token for target
+    chunks = np.arange(chunk_count, dtype=np.int64)
+    rng = random.Random(42)
+    rng.shuffle(chunks)
+    return chunks
+
 def train_web_model(config: TrainingConfig, model: LanguageModel, optimizer: AdamW, lr_scheduler: LRScheduler,
                     train_ids, val_input, val_target, device, metrics: TrainingMetrics):
+    # shuffle the chunks of train_ids
+    N = model.config.max_sequence
+    chunks = shuffle_training_chunks(train_ids, N)
+    # start from checkpoint
+    idx = metrics.completed_updates * config.descent_batch * config.training_batch_size
+    
     # train the actual models
     metrics.start()
     for step in range(config.job_steps):
         # accumulate multiple forward runs, then run gradient descent once
         train_data_batch = []
         for _ in range(config.descent_batch):
-            train_data_batch.append(build_input_and_target(train_ids, config.training_batch_size,
-                                                           model.config.max_sequence, device))
+            inputs = []
+            target = []
+            for _ in range(config.training_batch_size):
+                pos = chunks[idx] * N
+                idx += 1
+                inputs.append(torch.tensor(train_ids[pos:pos+N], dtype = torch.long, device = device))
+                target.append(torch.tensor(train_ids[pos+1:pos+1+N], dtype = torch.long, device = device))
+            train_data_batch.append((torch.stack(inputs), torch.stack(target)))
         flop_counter = FlopCounterMode(display=False) if config.count_flops else contextlib.nullcontext()
         losses = model.train_batch(optimizer, train_data_batch, config.use_bf16, flop_counter)
         last_lr = lr_scheduler.get_last_lr()
@@ -281,7 +300,6 @@ def save_training_config(training_config: TrainingConfig, model: LanguageModel, 
 
 # large scale validation on 1M tokens after training
 def post_training_validation(training_config: TrainingConfig, model: LanguageModel, val_ids, val_batch, device):
-
     rng = random.Random(42)
 
     print("Start post-training validation")
