@@ -22,8 +22,8 @@ from torch.utils.flop_counter import FlopCounterMode
 
 
 class TrainingConfig:
-    def __init__(self, data_dir, run_dir, total_steps, job_steps, 
-                 descent_batch = 4, training_batch_size = 8, use_bf16 = False, count_flops = False):
+    def __init__(self, data_dir, run_dir, total_steps, job_steps,
+                 descent_batch = 4, training_batch_size = 8, use_bf16 = False, count_flops = False, seed = 42):
         self.data_dir = data_dir
         self.run_dir = run_dir
         self.total_steps = total_steps
@@ -32,6 +32,7 @@ class TrainingConfig:
         self.training_batch_size = training_batch_size   # size of training batch, the "B"
         self.use_bf16 = use_bf16                         # use bf16 for computation (weight is still stored as fp32)
         self.count_flops = count_flops
+        self.seed = seed
 
     def checkpoint_file(self):
         return self.run_dir + "/" + "model.web.ckpt"
@@ -340,8 +341,8 @@ def save_training_result(training_config: TrainingConfig, model: LanguageModel, 
 def train_job(config: TrainingConfig, lr, device, max_sequence, feature_count, head_count, layer_count,
               load, training, final_validation=True):
 
-    random.seed(42)
-    torch.manual_seed(42)
+    random.seed(config.seed)
+    torch.manual_seed(config.seed)
 
     if training:
         if not load and os.path.exists(config.run_dir):
@@ -407,6 +408,7 @@ if __name__ == '__main__':
     parser.add_argument("--training-batch-size", type = int, default = 8, help = "size of training batch, the B")
     parser.add_argument("--use-bf16", action = "store_true", help = "use bf16 for forward pass")
     parser.add_argument("--count-flops", action = "store_true", help = "count FLOPs during forward and backward")
+    parser.add_argument("--seed", type = int, default = 42, help = "seed for training")
 
     args = parser.parse_args()
 
@@ -421,7 +423,7 @@ if __name__ == '__main__':
     load = args.load or args.gen_only
 
     config = TrainingConfig(args.data_path, args.run_path, args.total_steps, args.job_steps, 
-                            args.descent_batch, args.training_batch_size, args.use_bf16, args.count_flops)
+                            args.descent_batch, args.training_batch_size, args.use_bf16, args.count_flops, args.seed)
     model, tokenizer = train_job(config, lr, device, args.max_sequence, args.feature_count, 
                                  args.head_count, args.layer_count, load, not args.gen_only)
 
